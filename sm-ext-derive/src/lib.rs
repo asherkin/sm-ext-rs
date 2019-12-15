@@ -1,7 +1,7 @@
 extern crate proc_macro;
-use quote::{quote, format_ident, ToTokens, TokenStreamExt, quote_spanned};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use quote::{format_ident, quote, quote_spanned, ToTokens, TokenStreamExt};
 use syn;
-use proc_macro2::{Span, Literal, TokenStream, TokenTree, Ident, Punct, Group, Delimiter, Spacing};
 use syn::spanned::Spanned;
 
 #[proc_macro_derive(SMExtension, attributes(extension))]
@@ -90,6 +90,7 @@ struct MetadataInput {
 }
 
 impl MetadataInput {
+    #[allow(clippy::cognitive_complexity)]
     pub fn new(ast: &syn::DeriveInput) -> MetadataInput {
         let mut name = None;
         let mut description = None;
@@ -99,19 +100,16 @@ impl MetadataInput {
         let mut tag = None;
         let mut date = None;
 
-        let meta = ast
-            .attrs
-            .iter()
-            .find_map(|attr| match attr.parse_meta() {
-                Ok(m) => {
-                    if m.path().is_ident("extension") {
-                        Some(m)
-                    } else {
-                        None
-                    }
+        let meta = ast.attrs.iter().find_map(|attr| match attr.parse_meta() {
+            Ok(m) => {
+                if m.path().is_ident("extension") {
+                    Some(m)
+                } else {
+                    None
                 }
-                Err(e) => panic!("unable to parse attribute: {}", e),
-            });
+            }
+            Err(e) => panic!("unable to parse attribute: {}", e),
+        });
 
         if let Some(meta) = meta {
             let meta_list = match meta {
@@ -122,10 +120,7 @@ impl MetadataInput {
             for item in meta_list.nested {
                 let pair = match item {
                     syn::NestedMeta::Meta(syn::Meta::NameValue(ref pair)) => pair,
-                    _ => panic!(
-                        "unsupported attribute argument {:?}",
-                        item.to_token_stream()
-                    ),
+                    _ => panic!("unsupported attribute argument {:?}", item.to_token_stream()),
                 };
 
                 if pair.path.is_ident("name") {
@@ -171,10 +166,7 @@ impl MetadataInput {
                         panic!("date value must be string literal");
                     }
                 } else {
-                    panic!(
-                        "unsupported attribute key '{}' found",
-                        pair.path.to_token_stream()
-                    )
+                    panic!("unsupported attribute key '{}' found", pair.path.to_token_stream())
                 }
             }
         }
@@ -215,15 +207,7 @@ impl MetadataInput {
             None => MetadataString::String("with Rust".into()),
         };
 
-        MetadataInput {
-            name,
-            description,
-            url,
-            author,
-            version,
-            tag,
-            date,
-        }
+        MetadataInput { name, description, url, author, version, tag, date }
     }
 }
 
@@ -261,7 +245,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
             syn::FnArg::Receiver(param) => {
                 let span = param.span();
                 output.extend(error("Native callback must not be a method", span, span));
-            },
+            }
             syn::FnArg::Typed(param) => {
                 param_count += 1;
                 if param_count == 1 {
@@ -271,7 +255,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
 
                 let param_idx = (param_count - 1) as isize;
                 param_output.extend(quote_spanned!(param.span() => (*(args.offset(#param_idx))).try_into_plugin(&ctx)?,));
-            },
+            }
         };
     }
 

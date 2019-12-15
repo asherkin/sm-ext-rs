@@ -5,11 +5,11 @@ pub use sm_ext_derive::*;
 
 pub mod types {
     use super::vtables::*;
-    use std::os::raw::{c_uchar, c_uint, c_char};
-    use std::fmt::{Formatter, Error};
     use crate::IPluginContext;
     use std::convert::TryFrom;
-    use std::ffi::{CString, CStr};
+    use std::ffi::{CStr, CString};
+    use std::fmt::{Error, Formatter};
+    use std::os::raw::{c_char, c_uchar, c_uint};
 
     #[repr(transparent)]
     pub struct IdentityType(c_uint);
@@ -38,7 +38,10 @@ pub mod types {
         fn try_from_plugin(ctx: &'a crate::IPluginContext, value: T) -> Result<Self, Self::Error>;
     }
 
-    impl<T, U> TryFromWithContext<'_, T> for U where U: TryFrom<T> {
+    impl<T, U> TryFromWithContext<'_, T> for U
+    where
+        U: TryFrom<T>,
+    {
         type Error = U::Error;
 
         fn try_from_plugin(ctx: &IPluginContext, value: T) -> Result<Self, Self::Error> {
@@ -52,7 +55,10 @@ pub mod types {
         fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<T, Self::Error>;
     }
 
-    impl<'a, T, U> TryIntoWithContext<'a, U> for T where U: TryFromWithContext<'a, T> {
+    impl<'a, T, U> TryIntoWithContext<'a, U> for T
+    where
+        U: TryFromWithContext<'a, T>,
+    {
         type Error = U::Error;
 
         fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<U, U::Error> {
@@ -74,17 +80,13 @@ pub mod types {
 
     impl From<f32> for cell_t {
         fn from(x: f32) -> Self {
-            unsafe {
-                cell_t(std::mem::transmute::<f32, i32>(x))
-            }
+            cell_t(x.to_bits() as i32)
         }
     }
 
     impl From<cell_t> for f32 {
         fn from(x: cell_t) -> Self {
-            unsafe {
-                std::mem::transmute::<i32, f32>(x.0)
-            }
+            f32::from_bits(x.0 as u32)
         }
     }
 
@@ -128,9 +130,7 @@ pub mod types {
 
         fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
             let cell: &mut cell_t = value.try_into_plugin(ctx)?;
-            unsafe {
-                Ok(std::mem::transmute::<&mut cell_t, &mut i32>(cell))
-            }
+            unsafe { Ok(&mut *(cell as *mut cell_t as *mut i32)) }
         }
     }
 
@@ -139,9 +139,7 @@ pub mod types {
 
         fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
             let cell: &mut cell_t = value.try_into_plugin(ctx)?;
-            unsafe {
-                Ok(std::mem::transmute::<&mut cell_t, &mut f32>(cell))
-            }
+            unsafe { Ok(&mut *(cell as *mut cell_t as *mut f32)) }
         }
     }
 
@@ -239,7 +237,8 @@ pub(self) mod vtables {
     #[repr(C)]
     pub struct IPluginContextVtable {
         _Destructor: unsafe extern "thiscall" fn(this: IPluginContextPtr) -> (),
-        #[cfg(unix)] _Destructor2: unsafe extern "thiscall" fn(this: IPluginContextPtr) -> (),
+        #[cfg(unix)]
+        _Destructor2: unsafe extern "thiscall" fn(this: IPluginContextPtr) -> (),
         _GetVirtualMachine: unsafe extern "thiscall" fn(this: IPluginContextPtr),
         _GetContext: unsafe extern "thiscall" fn(this: IPluginContextPtr),
         _IsDebugging: unsafe extern "thiscall" fn(this: IPluginContextPtr),
@@ -470,7 +469,7 @@ mod IExtensionInterfaceApi {
 
 pub use IExtensionApi::*;
 mod IExtensionApi {
-    use super::types::{IExtensionPtr, IExtensionInterfacePtr, IdentityTokenPtr};
+    use super::types::{IExtensionInterfacePtr, IExtensionPtr, IdentityTokenPtr};
 
     use std::ffi::CStr;
     use std::os::raw::c_char;
@@ -559,7 +558,7 @@ mod SMInterfaceApi {
 
 pub use IShareSysApi::*;
 mod IShareSysApi {
-    use super::types::{IShareSysPtr, SMInterfacePtr, NativeInfo};
+    use super::types::{IShareSysPtr, NativeInfo, SMInterfacePtr};
     use super::IExtensionApi::IExtension;
     use super::SMInterfaceApi::SMInterface;
 
@@ -577,7 +576,7 @@ mod IShareSysApi {
 
     impl IShareSys {
         pub fn request_interface(&self, myself: &IExtension, name: &str, version: u32) -> Result<SMInterface, RequestInterfaceError> {
-            let c_name = CString::new(name).map_err(|err| RequestInterfaceError::StringError(err))?;
+            let c_name = CString::new(name).map_err(RequestInterfaceError::StringError)?;
 
             unsafe {
                 let mut iface: SMInterfacePtr = null_mut();
@@ -591,7 +590,9 @@ mod IShareSysApi {
             }
         }
 
-        // This is expected to be used via the register_natives! macro only
+        /// # Safety
+        ///
+        /// This is should be be used via the `register_natives!` macro only.
         pub unsafe fn add_natives(&self, myself: &IExtension, natives: *const NativeInfo) {
             ((**self.0).AddNatives)(self.0, myself.0, natives)
         }
@@ -600,9 +601,9 @@ mod IShareSysApi {
 
 pub use IPluginContextApi::*;
 mod IPluginContextApi {
-    use super::types::{IPluginContextPtr, cell_t};
-    use std::ffi::{CString, CStr};
+    use super::types::{cell_t, IPluginContextPtr};
     use c_str_macro::c_str;
+    use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
     use std::ptr::null_mut;
 
@@ -613,9 +614,7 @@ mod IPluginContextApi {
         pub fn throw_native_error(&self, err: String) -> cell_t {
             let fmt = c_str!("%s");
             let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
-            unsafe {
-                ((**self.0).ThrowNativeError)(self.0, fmt.as_ptr(), err.as_ptr())
-            }
+            unsafe { ((**self.0).ThrowNativeError)(self.0, fmt.as_ptr(), err.as_ptr()) }
         }
 
         pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, i32> {
@@ -655,9 +654,7 @@ macro_rules! declare_native {
         unsafe extern "C" fn $name(ctx: $crate::types::IPluginContextPtr, args: *const $crate::types::cell_t) -> $crate::types::cell_t {
             use ::std::convert::TryInto;
 
-            let callback = |$ctx: &$crate::IPluginContext, $args: &[$crate::types::cell_t]| -> $crate::types::cell_t {
-                $body
-            };
+            let callback = |$ctx: &$crate::IPluginContext, $args: &[$crate::types::cell_t]| -> $crate::types::cell_t { $body };
 
             let count: i32 = (*args).into();
             let args = ::std::slice::from_raw_parts(args.offset(1), count.try_into().unwrap());
@@ -698,9 +695,7 @@ pub fn safe_native_invoke<F: FnOnce() -> Result<types::cell_t, Box<dyn ::std::er
     match result {
         Ok(result) => match result {
             Ok(result) => result,
-            Err(err) => {
-                ctx.throw_native_error(err.to_string())
-            }
+            Err(err) => ctx.throw_native_error(err.to_string()),
         },
         Err(err) => {
             let msg = format!(
