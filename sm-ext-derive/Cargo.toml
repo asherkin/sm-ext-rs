@@ -1,0 +1,15 @@
+[package]
+name = "sm-ext-derive"
+version = "0.1.0"
+authors = ["Asher Baker <asherkin@limetech.io>"]
+description = "Procedural macro package for sm-ext helpers"
+workspace = ".."
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1"
+syn = { version = "1", features = ["full", "extra-traits"] }
+proc-macro2 = "1"

@@ -1,0 +1,17 @@
+[package]
+name = "sm-ext"
+version = "0.1.0"
+authors = ["Asher Baker <asherkin@limetech.io>"]
+description = "Helpers for writing SourceMod Extensions in Rust"
+edition = "2018"
+
+[dependencies]
+libc = "0.2.66"
+c_str_macro = "1.0.2"
+sm-ext-derive = { path = "sm-ext-derive", version = "0.1.0" }
+
+[[example]]
+name = "simple"
+crate-type = ["cdylib"]
+
+[workspace]
