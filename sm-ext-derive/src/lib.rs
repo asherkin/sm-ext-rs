@@ -291,6 +291,41 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     output.into()
 }
 
+#[proc_macro_attribute]
+pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let this_ptr_type = syn::parse_macro_input!(attr as syn::Path);
+    let mut input = syn::parse_macro_input!(item as syn::ItemStruct);
+    let mut output = TokenStream::new();
+
+    // println!("{}", input.to_token_stream().to_string());
+
+    input.attrs.push(syn::parse_quote!(#[repr(C)]));
+
+    for field in &mut input.fields {
+        if let syn::Type::BareFn(ty) = &mut field.ty {
+            ty.unsafety = syn::parse_quote!(unsafe);
+
+            // TODO: The dummy arg needs inserting for doing fastcall on Windows.
+            ty.inputs.insert(0, syn::parse_quote!(this: #this_ptr_type));
+
+            // TODO: This depends on the platform (once we move away from thiscall) and whether there are varargs
+            ty.abi = Some(match ty.variadic {
+                Some(_) => syn::parse_quote!(extern "cdecl"),
+                None => syn::parse_quote!(extern "thiscall"),
+            });
+        } else {
+            let span = field.span();
+            output.extend(error("All vtable struct fields must be bare functions", span, span));
+        }
+    }
+
+    output.extend(input.to_token_stream());
+
+    // println!("{}", output.to_string());
+
+    output.into()
+}
+
 fn error(s: &str, start: Span, end: Span) -> TokenStream {
     let mut v = Vec::new();
     v.push(respan(Literal::string(&s), Span::call_site()));
