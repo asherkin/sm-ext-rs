@@ -305,19 +305,57 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
         if let syn::Type::BareFn(ty) = &mut field.ty {
             ty.unsafety = syn::parse_quote!(unsafe);
 
-            // TODO: The dummy arg needs inserting for doing fastcall on Windows.
+            // If on windows and using fake thiscalls, prepend a dummy argument to be passed in edx
+            if cfg!(windows) && !cfg!(feature = "thiscall") {
+                ty.inputs.insert(0, syn::parse_quote!(_dummy: *const usize));
+            }
+
+            // Prepend the real thisptr argument.
             ty.inputs.insert(0, syn::parse_quote!(this: #this_ptr_type));
 
-            // TODO: This depends on the platform (once we move away from thiscall) and whether there are varargs
             ty.abi = Some(match ty.variadic {
                 Some(_) => syn::parse_quote!(extern "cdecl"),
-                None => syn::parse_quote!(extern "thiscall"),
+                None => if cfg!(feature = "thiscall") {
+                    syn::parse_quote!(extern "thiscall")
+                } else if cfg!(windows) {
+                    syn::parse_quote!(extern "fastcall")
+                } else {
+                    syn::parse_quote!(extern "cdecl")
+                },
             });
         } else {
             let span = field.span();
             output.extend(error("All vtable struct fields must be bare functions", span, span));
         }
     }
+
+    output.extend(input.to_token_stream());
+
+    // println!("{}", output.to_string());
+
+    output.into()
+}
+
+// TODO: This needs a lot of input checking and error reporting work
+#[proc_macro_attribute]
+pub fn vtable_override(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let mut input = syn::parse_macro_input!(item as syn::ItemFn);
+    let mut output = TokenStream::new();
+
+    // println!("{}", input.to_token_stream().to_string());
+
+    // If on windows and using fake thiscalls, prepend a dummy argument to be passed in edx
+    if cfg!(windows) && !cfg!(feature = "thiscall") {
+        input.sig.inputs.insert(1, syn::parse_quote!(_dummy: *const usize));
+    }
+
+    input.sig.abi = if cfg!(feature = "thiscall") {
+        syn::parse_quote!(extern "thiscall")
+    } else if cfg!(windows) {
+        syn::parse_quote!(extern "fastcall")
+    } else {
+        syn::parse_quote!(extern "cdecl")
+    };
 
     output.extend(input.to_token_stream());
 

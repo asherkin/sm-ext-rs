@@ -1,7 +1,41 @@
-#![feature(abi_thiscall)]
+#![cfg_attr(feature = "thiscall", feature(abi_thiscall))]
 #![allow(non_snake_case, non_camel_case_types, unused_variables)]
 
+// TODO: Don't want to export all this.
 pub use sm_ext_derive::*;
+
+#[macro_export]
+#[cfg(all(windows, not(feature = "thiscall")))]
+macro_rules! virtual_call {
+    ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
+        ((**$this).$name)(
+            $this,
+            std::ptr::null_mut(),
+            $(
+                $param,
+            )*
+        )
+    };
+    ($name:ident, $this:expr) => {
+        virtual_call!($name, $this, )
+    };
+}
+
+#[macro_export]
+#[cfg(not(all(windows, not(feature = "thiscall"))))]
+macro_rules! virtual_call {
+    ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
+        ((**$this).$name)(
+            $this,
+            $(
+                $param,
+            )*
+        )
+    };
+    ($name:ident, $this:expr) => {
+        virtual_call!($name, $this, )
+    };
+}
 
 pub mod types {
     use super::vtables::*;
@@ -304,6 +338,7 @@ mod IExtensionInterfaceApi {
     use super::vtables::IExtensionInterfaceVtable;
     use super::{IExtension, IShareSys, SMInterface};
 
+    use sm_ext_derive::vtable_override;
     use libc::size_t;
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_int, c_void};
@@ -378,11 +413,13 @@ mod IExtensionInterfaceApi {
             IExtensionInterfaceAdapter { vtable: Box::into_raw(Box::new(vtable)), delegate }
         }
 
-        unsafe extern "thiscall" fn get_extension_version(this: IExtensionInterfacePtr) -> i32 {
+        #[vtable_override]
+        unsafe fn get_extension_version(this: IExtensionInterfacePtr) -> i32 {
             8
         }
 
-        unsafe extern "thiscall" fn on_extension_load(this: IExtensionInterfacePtr, me: IExtensionPtr, sys: IShareSysPtr, error: *mut c_char, maxlength: size_t, late: bool) -> bool {
+        #[vtable_override]
+        unsafe fn on_extension_load(this: IExtensionInterfacePtr, me: IExtensionPtr, sys: IShareSysPtr, error: *mut c_char, maxlength: size_t, late: bool) -> bool {
             match (*this.cast::<Self>()).delegate.on_extension_load(IExtension(me), IShareSys(sys), late) {
                 Ok(_) => true,
                 Err(str) => {
@@ -392,27 +429,33 @@ mod IExtensionInterfaceApi {
             }
         }
 
-        unsafe extern "thiscall" fn on_extension_unload(this: IExtensionInterfacePtr) {
+        #[vtable_override]
+        unsafe fn on_extension_unload(this: IExtensionInterfacePtr) {
             (*this.cast::<Self>()).delegate.on_extension_unload()
         }
 
-        unsafe extern "thiscall" fn on_extensions_all_loaded(this: IExtensionInterfacePtr) {
+        #[vtable_override]
+        unsafe fn on_extensions_all_loaded(this: IExtensionInterfacePtr) {
             (*this.cast::<Self>()).delegate.on_extensions_all_loaded()
         }
 
-        unsafe extern "thiscall" fn on_extension_pause_change(this: IExtensionInterfacePtr, pause: bool) {
+        #[vtable_override]
+        unsafe fn on_extension_pause_change(this: IExtensionInterfacePtr, pause: bool) {
             (*this.cast::<Self>()).delegate.on_extension_pause_change(pause)
         }
 
-        unsafe extern "thiscall" fn query_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) -> bool {
+        #[vtable_override]
+        unsafe fn query_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) -> bool {
             (*this.cast::<Self>()).delegate.query_interface_drop(SMInterface(interface))
         }
 
-        unsafe extern "thiscall" fn notify_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) {
+        #[vtable_override]
+        unsafe fn notify_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) {
             (*this.cast::<Self>()).delegate.notify_interface_drop(SMInterface(interface))
         }
 
-        unsafe extern "thiscall" fn query_running(this: IExtensionInterfacePtr, error: *mut c_char, maxlength: size_t) -> bool {
+        #[vtable_override]
+        unsafe fn query_running(this: IExtensionInterfacePtr, error: *mut c_char, maxlength: size_t) -> bool {
             match (*this.cast::<Self>()).delegate.query_running() {
                 Ok(_) => true,
                 Err(str) => {
@@ -422,47 +465,58 @@ mod IExtensionInterfaceApi {
             }
         }
 
-        unsafe extern "thiscall" fn is_metamod_extension(this: IExtensionInterfacePtr) -> bool {
+        #[vtable_override]
+        unsafe fn is_metamod_extension(this: IExtensionInterfacePtr) -> bool {
             false
         }
 
-        unsafe extern "thiscall" fn get_extension_name(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_name(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_name().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_url(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_url(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_url().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_tag(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_tag(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_tag().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_author(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_author(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_author().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_ver_string(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_ver_string(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_ver_string().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_description(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_description(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_description().as_ptr()
         }
 
-        unsafe extern "thiscall" fn get_extension_date_string(this: IExtensionInterfacePtr) -> *const c_char {
+        #[vtable_override]
+        unsafe fn get_extension_date_string(this: IExtensionInterfacePtr) -> *const c_char {
             (*this.cast::<Self>()).delegate.get_extension_date_string().as_ptr()
         }
 
-        unsafe extern "thiscall" fn on_core_map_start(this: IExtensionInterfacePtr, edict_list: *mut c_void, edict_count: c_int, client_max: c_int) {
+        #[vtable_override]
+        unsafe fn on_core_map_start(this: IExtensionInterfacePtr, edict_list: *mut c_void, edict_count: c_int, client_max: c_int) {
             (*this.cast::<Self>()).delegate.on_core_map_start(edict_list, edict_count, client_max)
         }
 
-        unsafe extern "thiscall" fn on_dependencies_dropped(this: IExtensionInterfacePtr) {
+        #[vtable_override]
+        unsafe fn on_dependencies_dropped(this: IExtensionInterfacePtr) {
             (*this.cast::<Self>()).delegate.on_dependencies_dropped()
         }
 
-        unsafe extern "thiscall" fn on_core_map_end(this: IExtensionInterfacePtr) {
+        #[vtable_override]
+        unsafe fn on_core_map_end(this: IExtensionInterfacePtr) {
             (*this.cast::<Self>()).delegate.on_core_map_end()
         }
     }
@@ -487,29 +541,29 @@ mod IExtensionApi {
 
     impl IExtension {
         pub fn is_loaded(&self) -> bool {
-            unsafe { ((**self.0).IsLoaded)(self.0) }
+            unsafe { virtual_call!(IsLoaded, self.0) }
         }
 
         pub fn get_api(&self) -> IExtensionInterfacePtr {
-            unsafe { ((**self.0).GetAPI)(self.0) }
+            unsafe { virtual_call!(GetAPI, self.0) }
         }
 
         pub fn get_filename(&self) -> Result<&str, Utf8Error> {
             unsafe {
-                let c_name = ((**self.0).GetFilename)(self.0);
+                let c_name = virtual_call!(GetFilename, self.0);
 
                 CStr::from_ptr(c_name).to_str()
             }
         }
 
         pub fn get_identity(&self) -> IdentityTokenPtr {
-            unsafe { ((**self.0).GetIdentity)(self.0) }
+            unsafe { virtual_call!(GetIdentity, self.0) }
         }
 
         pub fn is_running(&self) -> Result<(), IsRunningError> {
             unsafe {
                 let mut c_error = [0 as c_char; 256];
-                let result = ((**self.0).IsRunning)(self.0, c_error.as_mut_ptr(), c_error.len());
+                let result = virtual_call!(IsRunning, self.0, c_error.as_mut_ptr(), c_error.len());
 
                 if result {
                     Ok(())
@@ -523,7 +577,7 @@ mod IExtensionApi {
         }
 
         pub fn is_external(&self) -> bool {
-            unsafe { ((**self.0).IsExternal)(self.0) }
+            unsafe { virtual_call!(IsExternal, self.0) }
         }
     }
 }
@@ -540,19 +594,19 @@ mod SMInterfaceApi {
 
     impl SMInterface {
         pub fn get_interface_version(&self) -> u32 {
-            unsafe { ((**self.0).GetInterfaceVersion)(self.0) }
+            unsafe { virtual_call!(GetInterfaceVersion, self.0) }
         }
 
         pub fn get_interface_name(&self) -> Result<&str, Utf8Error> {
             unsafe {
-                let c_name = ((**self.0).GetInterfaceName)(self.0);
+                let c_name = virtual_call!(GetInterfaceName, self.0);
 
                 CStr::from_ptr(c_name).to_str()
             }
         }
 
         pub fn is_version_compatible(&self, version: u32) -> bool {
-            unsafe { ((**self.0).IsVersionCompatible)(self.0, version) }
+            unsafe { virtual_call!(IsVersionCompatible, self.0, version) }
         }
     }
 }
@@ -581,7 +635,7 @@ mod IShareSysApi {
 
             unsafe {
                 let mut iface: SMInterfacePtr = null_mut();
-                let res = ((**self.0).RequestInterface)(self.0, c_name.as_ptr(), version, myself.0, &mut iface);
+                let res = virtual_call!(RequestInterface, self.0, c_name.as_ptr(), version, myself.0, &mut iface);
 
                 if res {
                     Ok(SMInterface(iface))
@@ -595,7 +649,7 @@ mod IShareSysApi {
         ///
         /// This is should be be used via the `register_natives!` macro only.
         pub unsafe fn add_natives(&self, myself: &IExtension, natives: *const NativeInfo) {
-            ((**self.0).AddNatives)(self.0, myself.0, natives)
+            virtual_call!(AddNatives, self.0, myself.0, natives)
         }
     }
 }
@@ -615,13 +669,13 @@ mod IPluginContextApi {
         pub fn throw_native_error(&self, err: String) -> cell_t {
             let fmt = c_str!("%s");
             let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
-            unsafe { ((**self.0).ThrowNativeError)(self.0, fmt.as_ptr(), err.as_ptr()) }
+            unsafe { virtual_call!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
         }
 
         pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, i32> {
             unsafe {
                 let mut addr: *mut cell_t = null_mut();
-                let res = ((**self.0).LocalToPhysAddr)(self.0, local, &mut addr);
+                let res = virtual_call!(LocalToPhysAddr, self.0, local, &mut addr);
 
                 if res == 0 {
                     Ok(&mut *addr)
@@ -634,7 +688,7 @@ mod IPluginContextApi {
         pub fn local_to_string(&self, local: cell_t) -> Result<&CStr, i32> {
             unsafe {
                 let mut addr: *mut c_char = null_mut();
-                let res = ((**self.0).LocalToString)(self.0, local, &mut addr);
+                let res = virtual_call!(LocalToString, self.0, local, &mut addr);
 
                 if res == 0 {
                     Ok(CStr::from_ptr(addr))
