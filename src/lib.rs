@@ -37,6 +37,23 @@ macro_rules! virtual_call {
     };
 }
 
+/// Identical to the non-fastcall-hack version above, but for calling functions that use varargs.
+/// TODO: Figure out a way to make this type-safe (and hopefully avoid the need for it completely.)
+#[macro_export]
+macro_rules! virtual_call_varargs {
+    ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
+        ((**$this).$name)(
+            $this,
+            $(
+                $param,
+            )*
+        )
+    };
+    ($name:ident, $this:expr) => {
+        virtual_call!($name, $this, )
+    };
+}
+
 pub use c_str_macro::c_str;
 
 pub mod types {
@@ -670,7 +687,7 @@ mod IPluginContextApi {
         pub fn throw_native_error(&self, err: String) -> cell_t {
             let fmt = c_str!("%s");
             let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
-            unsafe { virtual_call!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
+            unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
         }
 
         pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, i32> {
