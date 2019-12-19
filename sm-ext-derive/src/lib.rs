@@ -213,7 +213,7 @@ impl MetadataInput {
 
 #[proc_macro_attribute]
 pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = syn::parse_macro_input!(item as syn::ItemFn);
+    let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     // println!("{:#?}", input);
 
     let mut output = TokenStream::new();
@@ -260,8 +260,8 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     }
 
     let args_minimum = param_count - 1; // TODO: Handle optional args.
-    let callback_ident = &input.sig.ident;
-    let wrapper_ident = format_ident!("__{}_adapter", callback_ident);
+    let wrapper_ident = &input.sig.ident;
+    let callback_ident = format_ident!("__{}_impl", wrapper_ident);
     output.extend(quote! {
         unsafe extern "C" fn #wrapper_ident(ctx: sm_ext::types::IPluginContextPtr, args: *const sm_ext::types::cell_t) -> sm_ext::types::cell_t {
             let ctx = sm_ext::IPluginContext(ctx);
@@ -284,6 +284,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
         }
     });
 
+    input.sig.ident = callback_ident;
     output.extend(input.to_token_stream());
 
     // println!("{}", output.to_string());
@@ -323,7 +324,7 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
     output.extend(input.to_token_stream());
 
     if did_error {
-        return output.into()
+        return output.into();
     }
 
     input.attrs.pop();

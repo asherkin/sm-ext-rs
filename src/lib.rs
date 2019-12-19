@@ -37,6 +37,8 @@ macro_rules! virtual_call {
     };
 }
 
+pub use c_str_macro::c_str;
+
 pub mod types {
     use super::vtables::*;
     use crate::IPluginContext;
@@ -338,8 +340,8 @@ mod IExtensionInterfaceApi {
     use super::vtables::IExtensionInterfaceVtable;
     use super::{IExtension, IShareSys, SMInterface};
 
-    use sm_ext_derive::vtable_override;
     use libc::size_t;
+    use sm_ext_derive::vtable_override;
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_int, c_void};
 
@@ -587,7 +589,6 @@ mod SMInterfaceApi {
     use super::types::SMInterfacePtr;
 
     use std::ffi::CStr;
-    use std::str::Utf8Error;
 
     #[derive(Debug)]
     pub struct SMInterface(pub SMInterfacePtr);
@@ -597,11 +598,11 @@ mod SMInterfaceApi {
             unsafe { virtual_call!(GetInterfaceVersion, self.0) }
         }
 
-        pub fn get_interface_name(&self) -> Result<&str, Utf8Error> {
+        pub fn get_interface_name(&self) -> &str {
             unsafe {
                 let c_name = virtual_call!(GetInterfaceName, self.0);
 
-                CStr::from_ptr(c_name).to_str()
+                CStr::from_ptr(c_name).to_str().unwrap()
             }
         }
 
@@ -698,24 +699,6 @@ mod IPluginContextApi {
             }
         }
     }
-}
-
-// TODO: Not a huge fan of this one, but it seems to be the most user-friendly option without requiring the new macro features in rust nightly.
-// New macros would allow proper IDE auto-completion, as we could generate the conversion function externally, and probably handle arguments better.
-// I'd like to offer both routes though I think.
-#[macro_export]
-macro_rules! declare_native {
-    (fn $name:ident($ctx:ident: &IPluginContext, $args:ident: &[cell_t]) -> cell_t $body:tt) => {
-        unsafe extern "C" fn $name(ctx: $crate::types::IPluginContextPtr, args: *const $crate::types::cell_t) -> $crate::types::cell_t {
-            use ::std::convert::TryInto;
-
-            let callback = |$ctx: &$crate::IPluginContext, $args: &[$crate::types::cell_t]| -> $crate::types::cell_t { $body };
-
-            let count: i32 = (*args).into();
-            let args = ::std::slice::from_raw_parts(args.offset(1), count.try_into().unwrap());
-            callback(&$crate::IPluginContext(ctx), &args)
-        }
-    };
 }
 
 #[macro_export]
