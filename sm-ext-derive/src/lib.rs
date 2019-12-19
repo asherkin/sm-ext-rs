@@ -239,6 +239,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     }
 
     let mut param_count: i32 = 0;
+    let mut trailing_optional_count = 0;
     let mut param_output = TokenStream::new();
     for param in &input.sig.inputs {
         match param {
@@ -253,13 +254,37 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                     continue;
                 }
 
-                let param_idx = (param_count - 1) as isize;
-                param_output.extend(quote_spanned!(param.span() => (*(args.offset(#param_idx))).try_into_plugin(&ctx)?,));
+                let mut is_optional = false;
+                if let syn::Type::Path(path) = &*param.ty {
+                    if path.path.segments.last().unwrap().ident.to_string() == "Option" {
+                        is_optional = true;
+                        trailing_optional_count += 1;
+                    } else {
+                        trailing_optional_count = 0;
+                    }
+                } else {
+                    trailing_optional_count = 0;
+                }
+
+                let param_idx = param_count - 1;
+                if is_optional {
+                    param_output.extend(quote_spanned!(param.span() =>
+                        if #param_idx <= count {
+                            Some((*(args.offset(#param_idx as isize))).try_into_plugin(&ctx)?)
+                        } else {
+                            None
+                        },
+                    ));
+                } else {
+                    param_output.extend(quote_spanned!(param.span() =>
+                        (*(args.offset(#param_idx as isize))).try_into_plugin(&ctx)?,
+                    ));
+                }
             }
         };
     }
 
-    let args_minimum = param_count - 1; // TODO: Handle optional args.
+    let args_minimum = (param_count - 1) - trailing_optional_count;
     let wrapper_ident = &input.sig.ident;
     let callback_ident = format_ident!("__{}_impl", wrapper_ident);
     output.extend(quote! {

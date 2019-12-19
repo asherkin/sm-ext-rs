@@ -2,15 +2,15 @@ use sm_ext::types::{cell_t, IPluginContextPtr};
 use sm_ext::{c_str, native, register_natives, IExtension, IExtensionInterface, IPluginContext, IShareSys, SMExtension};
 use std::ffi::{CStr, CString};
 
-unsafe extern "C" fn test_native(ctx: IPluginContextPtr, args: *const cell_t) -> cell_t {
+unsafe extern "C" fn test_native_raw(ctx: IPluginContextPtr, args: *const cell_t) -> cell_t {
     println!(">>> {:?} {:?}", ctx, args);
 
     47.into()
 }
 
 #[native]
-fn test_native3(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32) -> Result<f32, String> {
-    println!(">>> {:?} {:?} {:?} {:?} {:?} {:?} {:?}", ctx, a, b, c, d, e, f);
+fn test_native(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32, g: Option<i32>, h: std::option::Option<f32>) -> Result<f32, String> {
+    println!(">>> {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", ctx, a, b, c, d, e, f, g, h);
 
     *e = 47;
     *f = 1.5;
@@ -19,7 +19,7 @@ fn test_native3(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut 
 }
 
 #[native]
-fn test_native4(ctx: &IPluginContext) -> Result<i32, Box<dyn std::error::Error>> {
+fn test_native_error(ctx: &IPluginContext) -> Result<i32, Box<dyn std::error::Error>> {
     println!(">>> {:?}", ctx);
 
     Err("This is an error...".into())
@@ -37,7 +37,7 @@ impl IExtensionInterface for MyExtension {
 
         println!(">>> Got interface: {:?} v{:?}", smutils.get_interface_name(), smutils.get_interface_version());
 
-        register_natives!(&sys, &myself, [("Rust_Test", test_native), ("Rust_Test3", test_native3), ("Rust_Test4", test_native4)]);
+        register_natives!(&sys, &myself, [("Rust_TestRaw", test_native_raw), ("Rust_Test", test_native), ("Rust_TestError", test_native_error)]);
 
         Ok(())
     }
