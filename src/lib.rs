@@ -5,7 +5,7 @@
 pub use sm_ext_derive::*;
 
 #[macro_export]
-#[cfg(all(windows, not(feature = "thiscall")))]
+#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]
 macro_rules! virtual_call {
     ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
         ((**$this).$name)(
@@ -22,7 +22,7 @@ macro_rules! virtual_call {
 }
 
 #[macro_export]
-#[cfg(not(all(windows, not(feature = "thiscall"))))]
+#[cfg(not(all(windows, target_arch = "x86", not(feature = "thiscall"))))]
 macro_rules! virtual_call {
     ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
         ((**$this).$name)(

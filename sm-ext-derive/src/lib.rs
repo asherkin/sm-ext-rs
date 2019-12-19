@@ -301,31 +301,55 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
 
     input.attrs.push(syn::parse_quote!(#[repr(C)]));
 
+    let mut did_error = false;
     for field in &mut input.fields {
         if let syn::Type::BareFn(ty) = &mut field.ty {
             ty.unsafety = syn::parse_quote!(unsafe);
+            ty.abi = syn::parse_quote!(extern "C");
 
-            // If on windows and using fake thiscalls, prepend a dummy argument to be passed in edx
-            if cfg!(windows) && !cfg!(feature = "thiscall") {
-                ty.inputs.insert(0, syn::parse_quote!(_dummy: *const usize));
-            }
-
-            // Prepend the real thisptr argument.
+            // Prepend the thisptr argument
             ty.inputs.insert(0, syn::parse_quote!(this: #this_ptr_type));
-
-            ty.abi = Some(match ty.variadic {
-                Some(_) => syn::parse_quote!(extern "cdecl"),
-                None => if cfg!(feature = "thiscall") {
-                    syn::parse_quote!(extern "thiscall")
-                } else if cfg!(windows) {
-                    syn::parse_quote!(extern "fastcall")
-                } else {
-                    syn::parse_quote!(extern "cdecl")
-                },
-            });
         } else {
             let span = field.span();
             output.extend(error("All vtable struct fields must be bare functions", span, span));
+            did_error = true;
+        }
+    }
+
+    if !did_error {
+        input.attrs.push(syn::parse_quote!(#[cfg(not(all(windows, target_arch = "x86")))]));
+    }
+
+    output.extend(input.to_token_stream());
+
+    if did_error {
+        return output.into()
+    }
+
+    input.attrs.pop();
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "thiscall"))]));
+
+    for field in &mut input.fields {
+        if let syn::Type::BareFn(ty) = &mut field.ty {
+            if ty.variadic.is_none() {
+                ty.abi = syn::parse_quote!(extern "thiscall");
+            }
+        }
+    }
+
+    output.extend(input.to_token_stream());
+
+    input.attrs.pop();
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]));
+
+    for field in &mut input.fields {
+        if let syn::Type::BareFn(ty) = &mut field.ty {
+            if ty.variadic.is_none() {
+                ty.abi = syn::parse_quote!(extern "fastcall");
+
+                // Add a dummy argument to be passed in edx
+                ty.inputs.insert(1, syn::parse_quote!(_dummy: *const usize));
+            }
         }
     }
 
@@ -344,18 +368,26 @@ pub fn vtable_override(_attr: proc_macro::TokenStream, item: proc_macro::TokenSt
 
     // println!("{}", input.to_token_stream().to_string());
 
-    // If on windows and using fake thiscalls, prepend a dummy argument to be passed in edx
-    if cfg!(windows) && !cfg!(feature = "thiscall") {
-        input.sig.inputs.insert(1, syn::parse_quote!(_dummy: *const usize));
-    }
+    input.attrs.push(syn::parse_quote!(#[cfg(not(all(windows, target_arch = "x86")))]));
 
-    input.sig.abi = if cfg!(feature = "thiscall") {
-        syn::parse_quote!(extern "thiscall")
-    } else if cfg!(windows) {
-        syn::parse_quote!(extern "fastcall")
-    } else {
-        syn::parse_quote!(extern "cdecl")
-    };
+    input.sig.abi = syn::parse_quote!(extern "C");
+
+    output.extend(input.to_token_stream());
+
+    input.attrs.pop();
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "thiscall"))]));
+
+    input.sig.abi = syn::parse_quote!(extern "thiscall");
+
+    output.extend(input.to_token_stream());
+
+    input.attrs.pop();
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]));
+
+    // Add a dummy argument to be passed in edx
+    input.sig.inputs.insert(1, syn::parse_quote!(_dummy: *const usize));
+
+    input.sig.abi = syn::parse_quote!(extern "fastcall");
 
     output.extend(input.to_token_stream());
 
