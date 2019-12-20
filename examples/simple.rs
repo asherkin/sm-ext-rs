@@ -9,8 +9,8 @@ unsafe extern "C" fn test_native_raw(ctx: IPluginContextPtr, args: *const cell_t
 }
 
 #[native]
-fn test_native(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32, g: Option<i32>, h: std::option::Option<f32>) -> Result<f32, String> {
-    println!(">>> {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", ctx, a, b, c, d, e, f, g, h);
+fn test_native(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32, g: Option<i32>, h: std::option::Option<f32>, i: Option<&str>) -> Result<f32, String> {
+    println!(">>> {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", ctx, a, b, c, d, e, f, g, h, i);
 
     *e = 47;
     *f = 1.5;

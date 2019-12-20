@@ -256,7 +256,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
 
                 let mut is_optional = false;
                 if let syn::Type::Path(path) = &*param.ty {
-                    if path.path.segments.last().unwrap().ident.to_string() == "Option" {
+                    if path.path.segments.last().unwrap().ident == "Option" {
                         is_optional = true;
                         trailing_optional_count += 1;
                     } else {
@@ -267,18 +267,24 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                 }
 
                 let param_idx = param_count - 1;
+                let convert_param = quote_spanned!(param.span() =>
+                    (*(args.offset(#param_idx as isize)))
+                        .try_into_plugin(&ctx)
+                        .map_err(|err| format!("Error processing argument {}: {}", #param_idx, err))?
+                );
+
                 if is_optional {
-                    param_output.extend(quote_spanned!(param.span() =>
+                    param_output.extend(quote! {
                         if #param_idx <= count {
-                            Some((*(args.offset(#param_idx as isize))).try_into_plugin(&ctx)?)
+                            Some(#convert_param)
                         } else {
                             None
                         },
-                    ));
+                    });
                 } else {
-                    param_output.extend(quote_spanned!(param.span() =>
-                        (*(args.offset(#param_idx as isize))).try_into_plugin(&ctx)?,
-                    ));
+                    param_output.extend(quote! {
+                        #convert_param,
+                    });
                 }
             }
         };
@@ -292,7 +298,6 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
             let ctx = sm_ext::IPluginContext(ctx);
 
             sm_ext::safe_native_invoke(&ctx, || -> Result<cell_t, Box<dyn std::error::Error>> {
-                use std::convert::TryInto;
                 use sm_ext::types::TryIntoWithContext;
 
                 let count: i32 = (*args).into();
@@ -304,7 +309,8 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                     #param_output
                 )?;
 
-                Ok(result.try_into_plugin(&ctx)?)
+                Ok(result.try_into_plugin(&ctx)
+                    .map_err(|err| format!("Error processing return value: {}", err))?)
             })
         }
     });

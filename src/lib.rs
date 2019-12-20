@@ -60,7 +60,7 @@ pub mod types {
     use super::vtables::*;
     use crate::IPluginContext;
     use std::convert::TryFrom;
-    use std::ffi::{CStr, CString};
+    use std::ffi::CStr;
     use std::fmt::{Error, Formatter};
     use std::os::raw::{c_char, c_uchar, c_uint};
 
@@ -143,25 +143,19 @@ pub mod types {
         }
     }
 
-    impl TryFromWithContext<'_, cell_t> for CString {
-        type Error = &'static str;
-
-        fn try_from_plugin(ctx: &IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-            match ctx.local_to_string(value) {
-                Ok(s) => Ok(s.into()),
-                Err(_) => Err("Invalid memory address"),
-            }
-        }
-    }
-
     impl<'a> TryFromWithContext<'a, cell_t> for &'a CStr {
         type Error = &'static str;
 
         fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-            match ctx.local_to_string(value) {
-                Ok(s) => Ok(s),
-                Err(_) => Err("Invalid memory address"),
-            }
+            Ok(ctx.local_to_string(value).map_err(|_| "Invalid memory address")?)
+        }
+    }
+
+    impl<'a> TryFromWithContext<'a, cell_t> for &'a str {
+        type Error = Box<dyn std::error::Error>;
+
+        fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+            Ok(ctx.local_to_string(value).map_err(|_| "Invalid memory address")?.to_str()?)
         }
     }
 
