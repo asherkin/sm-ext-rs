@@ -17,3 +17,7 @@ thiscall = []
 quote = "1"
 syn = { version = "1", features = ["full", "extra-traits"] }
 proc-macro2 = "1"
+
+[dev-dependencies.sm-ext]
+version = "0.1.0"
+path = ".."

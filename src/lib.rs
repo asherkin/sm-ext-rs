@@ -3,7 +3,6 @@
 
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString, NulError};
-use std::fmt::{Error, Formatter};
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
 use std::ptr::null_mut;
 use std::str::Utf8Error;
@@ -11,7 +10,7 @@ use std::str::Utf8Error;
 pub use c_str_macro::c_str;
 pub use libc::size_t;
 
-pub use sm_ext_derive::{SMExtension, native, vtable, vtable_override};
+pub use sm_ext_derive::{native, vtable, vtable_override, SMExtension};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
@@ -32,7 +31,7 @@ pub struct FeatureStatus(c_uchar);
 pub struct cell_t(i32);
 
 impl std::fmt::Display for cell_t {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         self.0.fmt(f)
     }
 }
@@ -706,6 +705,70 @@ macro_rules! register_natives {
             $sys.add_natives($myself, Box::leak(boxed).as_ptr());
         }
     };
+}
+
+/// The return type for native callbacks.
+pub trait NativeResult {
+    type Ok;
+    type Err;
+
+    fn into_result(self) -> Result<Self::Ok, Self::Err>;
+}
+
+/// Dummy error used for [`NativeResult`] implementations that can never fail.
+#[derive(Debug)]
+pub struct DummyNativeError;
+
+impl std::fmt::Display for DummyNativeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for DummyNativeError {}
+
+impl NativeResult for () {
+    type Ok = i32;
+    type Err = DummyNativeError;
+
+    fn into_result(self) -> Result<Self::Ok, Self::Err> {
+        Ok(0)
+    }
+}
+
+impl<'a, T> NativeResult for T
+where
+    T: TryIntoPlugin<'a, cell_t>,
+{
+    type Ok = T;
+    type Err = DummyNativeError;
+
+    fn into_result(self) -> Result<Self::Ok, Self::Err> {
+        Ok(self)
+    }
+}
+
+impl<E> NativeResult for Result<(), E> {
+    type Ok = i32;
+    type Err = E;
+
+    #[allow(clippy::type_complexity)]
+    fn into_result(self) -> Result<<Result<(), E> as NativeResult>::Ok, <Result<(), E> as NativeResult>::Err> {
+        self.map(|_| 0)
+    }
+}
+
+impl<'a, T, E> NativeResult for Result<T, E>
+where
+    T: TryIntoPlugin<'a, cell_t>,
+{
+    type Ok = T;
+    type Err = E;
+
+    #[allow(clippy::type_complexity)]
+    fn into_result(self) -> Result<<Result<T, E> as NativeResult>::Ok, <Result<T, E> as NativeResult>::Err> {
+        self
+    }
 }
 
 /// Wrapper to invoke a native callback and translate a [`panic!`] or [`Err`](std::result::Result::Err)

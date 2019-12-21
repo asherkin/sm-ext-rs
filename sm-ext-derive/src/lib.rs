@@ -17,6 +17,10 @@ use syn::spanned::Spanned;
 ///   * `date`
 ///
 /// If not overridden, all extension metadata will be set to suitable values using the Cargo package metadata.
+///
+/// An instance of the struct this is applied to will be created with [`Default::default()`] to serve
+/// as the global singleton instance, and you can implement the [`IExtensionInterface`] trait on the
+/// type to handle SourceMod lifecycle callbacks.
 #[proc_macro_derive(SMExtension, attributes(extension))]
 pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
@@ -33,7 +37,8 @@ pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::
     let extension_date = CStringToken(input.date);
 
     let expanded = quote! {
-        #[cfg(all(windows, not(target_feature = "crt-static")))]
+        // TODO: Checking for a test build here doesn't work when a dependent crate is being tested.
+        #[cfg(all(windows, not(target_feature = "crt-static"), not(test)))]
         compile_error!("SourceMod requires the Windows CRT to be statically linked (pass `-C target-feature=+crt-static` to rustc)");
 
         #[no_mangle]
@@ -233,20 +238,20 @@ impl MetadataInput {
 /// A valid native callback must be a free function that is not async, not unsafe, not extern, has
 /// no generic parameters, the first argument takes a [`&IPluginContext`](IPluginContext), any
 /// remaining arguments are convertible to [`cell_t`] using [`TryIntoPlugin`] (possibly wrapped in
-/// an [`Option`]), and returns a [`Result`] where the [`Ok`](Result::Ok) variant type is convertible
-/// to [`cell_t`] using [`TryIntoPlugin`] and the [`Err`](Result::Err) variant type satisfies the
-/// [`std::error::Error`] trait.
+/// an [`Option`]), and returns a type that satisfies the [`NativeResult`] trait.
 ///
 /// When the native is invoked by SourceMod the input arguments will be checked to ensure all required
 /// arguments have been passed and are of the correct type, and panics or error results will automatically
 /// be converted into a SourceMod native error using [`safe_native_invoke`].
 ///
-/// # Examples
+/// # Example
 ///
 /// ```
+/// use sm_ext::{native, IPluginContext};
+///
 /// #[native]
-/// fn simple_add_native(ctx: &IPluginContext, a: i32, b: i32) -> Result<i32, String> {
-///     Ok(a + b)
+/// fn simple_add_native(_ctx: &IPluginContext, a: i32, b: i32) -> i32 {
+///     a + b
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -335,7 +340,8 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
         unsafe extern "C" fn #wrapper_ident(ctx: sm_ext::IPluginContextPtr, args: *const sm_ext::cell_t) -> sm_ext::cell_t {
             let ctx = sm_ext::IPluginContext(ctx);
 
-            sm_ext::safe_native_invoke(&ctx, || -> Result<cell_t, Box<dyn std::error::Error>> {
+            sm_ext::safe_native_invoke(&ctx, || -> Result<sm_ext::cell_t, Box<dyn std::error::Error>> {
+                use sm_ext::NativeResult;
                 use sm_ext::TryIntoPlugin;
 
                 let count: i32 = (*args).into();
@@ -345,7 +351,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
 
                 let result = #callback_ident(
                     #param_output
-                )?;
+                ).into_result()?;
 
                 Ok(result.try_into_plugin(&ctx)
                     .map_err(|err| format!("Error processing return value: {}", err))?)
