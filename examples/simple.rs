@@ -1,15 +1,8 @@
-use sm_ext::types::{cell_t, IPluginContextPtr};
-use sm_ext::{c_str, native, register_natives, IExtension, IExtensionInterface, IPluginContext, IShareSys, SMExtension};
+use sm_ext::{c_str, cell_t, native, register_natives, IExtension, IExtensionInterface, IPluginContext, IShareSys, SMExtension};
 use std::ffi::{CStr, CString};
 
-unsafe extern "C" fn test_native_raw(ctx: IPluginContextPtr, args: *const cell_t) -> cell_t {
-    println!(">>> {:?} {:?}", ctx, args);
-
-    47.into()
-}
-
 #[native]
-fn test_native(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32, g: Option<i32>, h: std::option::Option<f32>, i: Option<&str>) -> Result<f32, String> {
+fn test_native(ctx: &IPluginContext, a: i32, b: i32, c: f32, d: &CStr, e: &mut i32, f: &mut f32, g: Option<i32>, h: Option<f32>, i: Option<&str>) -> Result<f32, String> {
     println!(">>> {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", ctx, a, b, c, d, e, f, g, h, i);
 
     *e = 47;
@@ -25,9 +18,9 @@ fn test_native_error(ctx: &IPluginContext) -> Result<i32, Box<dyn std::error::Er
     Err("This is an error...".into())
 }
 
-#[derive(SMExtension)]
+#[derive(Default, SMExtension)]
 #[extension(name = "Rusty", description = "Sample extension written in Rust")]
-pub struct MyExtension();
+pub struct MyExtension;
 
 impl IExtensionInterface for MyExtension {
     fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
@@ -37,7 +30,7 @@ impl IExtensionInterface for MyExtension {
 
         println!(">>> Got interface: {:?} v{:?}", smutils.get_interface_name(), smutils.get_interface_version());
 
-        register_natives!(&sys, &myself, [("Rust_TestRaw", test_native_raw), ("Rust_Test", test_native), ("Rust_TestError", test_native_error)]);
+        register_natives!(&sys, &myself, [("Rust_Test", test_native), ("Rust_TestError", test_native_error)]);
 
         Ok(())
     }

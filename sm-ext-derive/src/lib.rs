@@ -1,9 +1,22 @@
 extern crate proc_macro;
+
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned, ToTokens, TokenStreamExt};
 use syn;
 use syn::spanned::Spanned;
 
+/// Creates the entry point for SourceMod to recognise this library as an extension and set the required metadata.
+///
+/// The `#[extension]` attribute recognises the following optional keys using the *MetaListNameValueStr* syntax:
+///   * `name`
+///   * `description`
+///   * `url`
+///   * `author`
+///   * `version`
+///   * `tag`
+///   * `date`
+///
+/// If not overridden, all extension metadata will be set to suitable values using the Cargo package metadata.
 #[proc_macro_derive(SMExtension, attributes(extension))]
 pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
@@ -20,12 +33,16 @@ pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::
     let extension_date = CStringToken(input.date);
 
     let expanded = quote! {
+        #[cfg(all(windows, not(target_feature = "crt-static")))]
+        compile_error!("SourceMod requires the Windows CRT to be statically linked (pass `-C target-feature=+crt-static` to rustc)");
+
         #[no_mangle]
         pub extern "C" fn GetSMExtAPI() -> *mut ::sm_ext::IExtensionInterfaceAdapter<#name> {
-            let delegate = #name();
+            let delegate: #name = Default::default();
             let extension = ::sm_ext::IExtensionInterfaceAdapter::new(delegate);
             Box::into_raw(Box::new(extension))
         }
+
         impl ::sm_ext::IExtensionMetadata for #name {
             fn get_extension_name(&self) -> &'static ::std::ffi::CStr {
                 #extension_name
@@ -211,6 +228,27 @@ impl MetadataInput {
     }
 }
 
+/// Declares a function as a native callback and generates internal support code.
+///
+/// A valid native callback must be a free function that is not async, not unsafe, not extern, has
+/// no generic parameters, the first argument takes a [`&IPluginContext`](IPluginContext), any
+/// remaining arguments are convertible to [`cell_t`] using [`TryIntoPlugin`] (possibly wrapped in
+/// an [`Option`]), and returns a [`Result`] where the [`Ok`](Result::Ok) variant type is convertible
+/// to [`cell_t`] using [`TryIntoPlugin`] and the [`Err`](Result::Err) variant type satisfies the
+/// [`std::error::Error`] trait.
+///
+/// When the native is invoked by SourceMod the input arguments will be checked to ensure all required
+/// arguments have been passed and are of the correct type, and panics or error results will automatically
+/// be converted into a SourceMod native error using [`safe_native_invoke`].
+///
+/// # Examples
+///
+/// ```
+/// #[native]
+/// fn simple_add_native(ctx: &IPluginContext, a: i32, b: i32) -> Result<i32, String> {
+///     Ok(a + b)
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut input = syn::parse_macro_input!(item as syn::ItemFn);
@@ -294,11 +332,11 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     let wrapper_ident = &input.sig.ident;
     let callback_ident = format_ident!("__{}_impl", wrapper_ident);
     output.extend(quote! {
-        unsafe extern "C" fn #wrapper_ident(ctx: sm_ext::types::IPluginContextPtr, args: *const sm_ext::types::cell_t) -> sm_ext::types::cell_t {
+        unsafe extern "C" fn #wrapper_ident(ctx: sm_ext::IPluginContextPtr, args: *const sm_ext::cell_t) -> sm_ext::cell_t {
             let ctx = sm_ext::IPluginContext(ctx);
 
             sm_ext::safe_native_invoke(&ctx, || -> Result<cell_t, Box<dyn std::error::Error>> {
-                use sm_ext::types::TryIntoWithContext;
+                use sm_ext::TryIntoPlugin;
 
                 let count: i32 = (*args).into();
                 if count < #args_minimum {
@@ -331,6 +369,7 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
 
     // println!("{}", input.to_token_stream().to_string());
 
+    input.attrs.push(syn::parse_quote!(#[doc(hidden)]));
     input.attrs.push(syn::parse_quote!(#[repr(C)]));
 
     let mut did_error = false;
