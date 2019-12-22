@@ -11,7 +11,7 @@ use std::str::Utf8Error;
 pub use c_str_macro::c_str;
 pub use libc::size_t;
 
-pub use sm_ext_derive::{native, vtable, vtable_override, SMExtension, SMInterfaceApi};
+pub use sm_ext_derive::{native, vtable, vtable_override, ICallableApi, SMExtension, SMInterfaceApi};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
@@ -101,10 +101,10 @@ impl From<cell_t> for f32 {
 }
 
 impl<'a> TryFromPlugin<'a, cell_t> for &'a CStr {
-    type Error = &'static str;
+    type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-        Ok(ctx.local_to_string(value).map_err(|_| "Invalid memory address")?)
+        Ok(ctx.local_to_string(value)?)
     }
 }
 
@@ -112,25 +112,22 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a str {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-        Ok(ctx.local_to_string(value).map_err(|_| "Invalid memory address")?.to_str()?)
+        Ok(ctx.local_to_string(value)?.to_str()?)
     }
 }
 
 // TODO: These &mut implementations seem risky, maybe a SPRef/SPString/SPArray wrapper object would be a better way to go...
 
 impl<'a> TryFromPlugin<'a, cell_t> for &'a mut cell_t {
-    type Error = &'static str;
+    type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-        match ctx.local_to_phys_addr(value) {
-            Ok(s) => Ok(s),
-            Err(_) => Err("Invalid memory address"),
-        }
+        Ok(ctx.local_to_phys_addr(value)?)
     }
 }
 
 impl<'a> TryFromPlugin<'a, cell_t> for &'a mut i32 {
-    type Error = &'static str;
+    type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         let cell: &mut cell_t = value.try_into_plugin(ctx)?;
@@ -139,7 +136,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a mut i32 {
 }
 
 impl<'a> TryFromPlugin<'a, cell_t> for &'a mut f32 {
-    type Error = &'static str;
+    type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         let cell: &mut cell_t = value.try_into_plugin(ctx)?;
@@ -487,8 +484,8 @@ pub struct IShareSysVtable {
 
 #[derive(Debug)]
 pub enum RequestInterfaceError {
-    InvalidNameError(NulError),
-    InterfaceError(),
+    InvalidName(NulError),
+    InvalidInterface(),
 }
 
 #[derive(Debug)]
@@ -502,7 +499,7 @@ impl IShareSys {
     }
 
     pub fn request_raw_interface(&self, myself: &IExtension, name: &str, version: u32) -> Result<SMInterface, RequestInterfaceError> {
-        let c_name = CString::new(name).map_err(RequestInterfaceError::InvalidNameError)?;
+        let c_name = CString::new(name).map_err(RequestInterfaceError::InvalidName)?;
 
         unsafe {
             let mut iface: SMInterfacePtr = null_mut();
@@ -511,7 +508,7 @@ impl IShareSys {
             if res {
                 Ok(SMInterface(iface))
             } else {
-                Err(RequestInterfaceError::InterfaceError())
+                Err(RequestInterfaceError::InvalidInterface())
             }
         }
     }
@@ -523,6 +520,120 @@ impl IShareSys {
         virtual_call!(AddNatives, self.0, myself.0, natives)
     }
 }
+
+/// Error codes for SourcePawn routines.
+#[repr(C)]
+#[derive(Debug)]
+pub enum SPError {
+    /// No error occurred
+    None = 0,
+    /// File format unrecognized
+    FileFormat = 1,
+    /// A decompressor was not found
+    Decompressor = 2,
+    /// Not enough space left on the heap
+    HeapLow = 3,
+    /// Invalid parameter or parameter type
+    Param = 4,
+    /// A memory address was not valid
+    InvalidAddress = 5,
+    /// The object in question was not found
+    NotFound = 6,
+    /// Invalid index parameter
+    Index = 7,
+    /// Not enough space left on the stack
+    StackLow = 8,
+    /// Debug mode was not on or debug section not found
+    NotDebugging = 9,
+    /// Invalid instruction was encountered
+    InvalidInstruction = 10,
+    /// Invalid memory access
+    MemAccess = 11,
+    /// Stack went beyond its minimum value
+    StackMin = 12,
+    /// Heap went beyond its minimum value
+    HeapMin = 13,
+    /// Division by zero
+    DivideByZero = 14,
+    /// Array index is out of bounds
+    ArrayBounds = 15,
+    /// Instruction had an invalid parameter
+    InstructionParam = 16,
+    /// A native leaked an item on the stack
+    StackLeak = 17,
+    /// A native leaked an item on the heap
+    HeapLeak = 18,
+    /// A dynamic array is too big
+    ArrayTooBig = 19,
+    /// Tracker stack is out of bounds
+    TrackerBounds = 20,
+    /// Native was pending or invalid
+    InvalidNative = 21,
+    /// Maximum number of parameters reached
+    ParamsMax = 22,
+    /// Error originates from a native
+    Native = 23,
+    /// Function or plugin is not runnable
+    NotRunnable = 24,
+    /// Function call was aborted
+    Aborted = 25,
+    /// Code is too old for this VM
+    CodeTooOld = 26,
+    /// Code is too new for this VM
+    CodeTooNew = 27,
+    /// Out of memory
+    OutOfMemory = 28,
+    /// Integer overflow (-INT_MIN / -1)
+    IntegerOverflow = 29,
+    /// Timeout
+    Timeout = 30,
+    /// Custom message
+    User = 31,
+    /// Custom fatal message
+    Fatal = 32,
+}
+
+impl std::fmt::Display for SPError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.pad(match self {
+            SPError::None => "No error occurred",
+            SPError::FileFormat => "Unrecognizable file format",
+            SPError::Decompressor => "Decompressor was not found",
+            SPError::HeapLow => "Not enough space on the heap",
+            SPError::Param => "Invalid parameter or parameter type",
+            SPError::InvalidAddress => "Invalid plugin address",
+            SPError::NotFound => "Object or index not found",
+            SPError::Index => "Invalid index or index not found",
+            SPError::StackLow => "Not enough space on the stack",
+            SPError::NotDebugging => "Debug section not found or debug not enabled",
+            SPError::InvalidInstruction => "Invalid instruction",
+            SPError::MemAccess => "Invalid memory access",
+            SPError::StackMin => "Stack went below stack boundary",
+            SPError::HeapMin => "Heap went below heap boundary",
+            SPError::DivideByZero => "Divide by zero",
+            SPError::ArrayBounds => "Array index is out of bounds",
+            SPError::InstructionParam => "Instruction contained invalid parameter",
+            SPError::StackLeak => "Stack memory leaked by native",
+            SPError::HeapLeak => "Heap memory leaked by native",
+            SPError::ArrayTooBig => "Dynamic array is too big",
+            SPError::TrackerBounds => "Tracker stack is out of bounds",
+            SPError::InvalidNative => "Native is not bound",
+            SPError::ParamsMax => "Maximum number of parameters reached",
+            SPError::Native => "Native detected error",
+            SPError::NotRunnable => "Plugin not runnable",
+            SPError::Aborted => "Call was aborted",
+            SPError::CodeTooOld => "Plugin format is too old",
+            SPError::CodeTooNew => "Plugin format is too new",
+            SPError::OutOfMemory => "Out of memory",
+            SPError::IntegerOverflow => "Integer overflow",
+            SPError::Timeout => "Script execution timed out",
+            SPError::User => "Custom error",
+            SPError::Fatal => "Fatal error",
+        })
+    }
+}
+
+impl std::error::Error for SPError {}
 
 pub type IPluginContextPtr = *mut *mut IPluginContextVtable;
 
@@ -549,8 +660,8 @@ pub struct IPluginContextVtable {
     _FindPubvarByName: fn(),
     _GetPubvarAddrs: fn(),
     _GetPubVarsNum: fn(),
-    pub LocalToPhysAddr: fn(local_addr: cell_t, phys_addr: *mut *mut cell_t) -> c_int,
-    pub LocalToString: fn(local_addr: cell_t, addr: *mut *mut c_char) -> c_int,
+    pub LocalToPhysAddr: fn(local_addr: cell_t, phys_addr: *mut *mut cell_t) -> SPError,
+    pub LocalToString: fn(local_addr: cell_t, addr: *mut *mut c_char) -> SPError,
     _StringToLocal: fn(),
     _StringToLocalUTF8: fn(),
     _PushCell: fn(),
@@ -598,28 +709,26 @@ impl IPluginContext {
         unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
     }
 
-    pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, i32> {
+    pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, SPError> {
         unsafe {
             let mut addr: *mut cell_t = null_mut();
             let res = virtual_call!(LocalToPhysAddr, self.0, local, &mut addr);
 
-            if res == 0 {
-                Ok(&mut *addr)
-            } else {
-                Err(res)
+            match res {
+                SPError::None => Ok(&mut *addr),
+                _ => Err(res),
             }
         }
     }
 
-    pub fn local_to_string(&self, local: cell_t) -> Result<&CStr, i32> {
+    pub fn local_to_string(&self, local: cell_t) -> Result<&CStr, SPError> {
         unsafe {
             let mut addr: *mut c_char = null_mut();
             let res = virtual_call!(LocalToString, self.0, local, &mut addr);
 
-            if res == 0 {
-                Ok(CStr::from_ptr(addr))
-            } else {
-                Err(res)
+            match res {
+                SPError::None => Ok(CStr::from_ptr(addr)),
+                _ => Err(res),
             }
         }
     }
@@ -666,13 +775,13 @@ pub type IForwardPtr = *mut *mut IForwardVtable;
 #[vtable(IForwardPtr)]
 pub struct IForwardVtable {
     // ICallable
-    pub PushCell: fn(cell: cell_t) -> c_int,
-    pub PushCellByRef: fn(cell: *mut cell_t, flags: c_int) -> c_int,
-    pub PushFloat: fn(number: f32) -> c_int,
-    pub PushFloatByRef: fn(number: *mut f32, flags: c_int) -> c_int,
-    pub PushArray: fn(cell: *mut cell_t, cells: c_uint, flags: c_int) -> c_int,
-    pub PushString: fn(string: *const c_char) -> c_int,
-    pub PushStringEx: fn(string: *const c_char, length: size_t, sz_flags: c_int, cp_flags: c_int) -> c_int,
+    pub PushCell: fn(cell: cell_t) -> SPError,
+    pub PushCellByRef: fn(cell: *mut cell_t, flags: c_int) -> SPError,
+    pub PushFloat: fn(number: f32) -> SPError,
+    pub PushFloatByRef: fn(number: *mut f32, flags: c_int) -> SPError,
+    pub PushArray: fn(cell: *mut cell_t, cells: c_uint, flags: c_int) -> SPError,
+    pub PushString: fn(string: *const c_char) -> SPError,
+    pub PushStringEx: fn(string: *const c_char, length: size_t, sz_flags: c_int, cp_flags: c_int) -> SPError,
     pub Cancel: fn(),
 
     // IForward
@@ -682,13 +791,35 @@ pub struct IForwardVtable {
     pub GetForwardName: fn() -> *const c_char,
     pub GetFunctionCount: fn() -> c_uint,
     pub GetExecType: fn() -> ExecType,
-    pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> i32,
+    pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> SPError,
 }
 
-#[derive(Debug)]
-pub struct IForward(pub IForwardPtr);
+// TODO: This interface is very, very rough.
+pub trait ICallableApi {
+    fn push_int(&self, cell: i32) -> Result<(), SPError>;
+}
 
-impl IForward {}
+#[derive(Debug, ICallableApi)]
+pub struct IForward(pub IForwardPtr, IForwardManagerPtr);
+
+impl Drop for IForward {
+    fn drop(&mut self) {
+        IForwardManager(self.1).release_forward(self);
+    }
+}
+
+impl IForward {
+    pub fn execute(&self) -> Result<cell_t, SPError> {
+        unsafe {
+            let mut result: cell_t = 0.into();
+            let res = virtual_call!(Execute, self.0, &mut result, null_mut());
+            match res {
+                SPError::None => Ok(result),
+                _ => Err(res),
+            }
+        }
+    }
+}
 
 // TODO: Type alias until it is properly implemented
 pub type IChangeableForwardPtr = IForwardPtr;
@@ -709,9 +840,38 @@ pub struct IForwardManagerVtable {
     pub ReleaseForward: fn(forward: IForwardPtr) -> (),
 }
 
+#[derive(Debug)]
+pub enum CreateForwardError {
+    InvalidName(NulError),
+    Other,
+}
+
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IForwardManager", 4)]
 pub struct IForwardManager(pub IForwardManagerPtr);
+
+impl IForwardManager {
+    pub fn create_raw_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
+        let c_name = CString::new(name).map_err(CreateForwardError::InvalidName)?;
+
+        unsafe {
+            let forward = virtual_call_varargs!(CreateForward, self.0, c_name.as_ptr(), et, params.len() as u32, params.as_ptr());
+
+            if forward.is_null() {
+                Err(CreateForwardError::Other)
+            } else {
+                Ok(IForward(forward, self.0))
+            }
+        }
+    }
+
+    pub fn release_forward(&self, forward: &mut IForward) {
+        unsafe {
+            virtual_call!(ReleaseForward, self.0, forward.0);
+            forward.0 = null_mut();
+        }
+    }
+}
 
 /// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
 /// virtual calls on Windows without compiler support for the `thiscall` calling convention.

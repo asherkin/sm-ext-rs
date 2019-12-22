@@ -306,7 +306,7 @@ pub fn derive_interface_api(input: proc_macro::TokenStream) -> proc_macro::Token
                 unsafe {
                     let c_name = virtual_call!(GetInterfaceName, self.0);
 
-                    CStr::from_ptr(c_name).to_str().unwrap()
+                    std::ffi::CStr::from_ptr(c_name).to_str().unwrap()
                 }
             }
 
@@ -315,6 +315,28 @@ pub fn derive_interface_api(input: proc_macro::TokenStream) -> proc_macro::Token
             }
         }
     });
+
+    output.into()
+}
+
+#[proc_macro_derive(ICallableApi)]
+pub fn derive_callable_api(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    let ident = input.ident;
+    let output = quote! {
+        impl ICallableApi for #ident {
+            fn push_int(&self, cell: i32) -> Result<(), SPError> {
+                unsafe {
+                    let res = virtual_call!(PushCell, self.0, cell.into());
+                    match res {
+                        SPError::None => Ok(()),
+                        _ => Err(res),
+                    }
+                }
+            }
+        }
+    };
 
     output.into()
 }
