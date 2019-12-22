@@ -1,5 +1,6 @@
 #![cfg_attr(feature = "thiscall", feature(abi_thiscall))]
 #![allow(non_snake_case, non_camel_case_types, unused_variables)]
+//! This interface is extremely unstable, everything just lives in a soup at the top level for now.
 
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString, NulError};
@@ -10,7 +11,7 @@ use std::str::Utf8Error;
 pub use c_str_macro::c_str;
 pub use libc::size_t;
 
-pub use sm_ext_derive::{native, vtable, vtable_override, SMExtension};
+pub use sm_ext_derive::{native, vtable, vtable_override, SMExtension, SMInterfaceApi};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
@@ -228,6 +229,7 @@ impl<T: IExtensionInterface + IExtensionMetadata> Drop for IExtensionInterfaceAd
     }
 }
 
+// TODO: The implementations in here need to catch panics in the delegate functions.
 impl<T: IExtensionInterface + IExtensionMetadata> IExtensionInterfaceAdapter<T> {
     pub fn new(delegate: T) -> IExtensionInterfaceAdapter<T> {
         let vtable = IExtensionInterfaceVtable {
@@ -438,26 +440,20 @@ pub struct SMInterfaceVtable {
     pub IsVersionCompatible: fn(version: c_uint) -> bool,
 }
 
-#[derive(Debug)]
-pub struct SMInterface(pub SMInterfacePtr);
-
-impl SMInterface {
-    pub fn get_interface_version(&self) -> u32 {
-        unsafe { virtual_call!(GetInterfaceVersion, self.0) }
-    }
-
-    pub fn get_interface_name(&self) -> &str {
-        unsafe {
-            let c_name = virtual_call!(GetInterfaceName, self.0);
-
-            CStr::from_ptr(c_name).to_str().unwrap()
-        }
-    }
-
-    pub fn is_version_compatible(&self, version: u32) -> bool {
-        unsafe { virtual_call!(IsVersionCompatible, self.0, version) }
-    }
+pub trait RequestableInterface {
+    fn get_interface_name() -> &'static str;
+    fn get_interface_version() -> u32;
+    unsafe fn from_raw_interface(iface: SMInterface) -> Self;
 }
+
+pub trait SMInterfaceApi {
+    fn get_interface_version(&self) -> u32;
+    fn get_interface_name(&self) -> &str;
+    fn is_version_compatible(&self, version: u32) -> bool;
+}
+
+#[derive(Debug, SMInterfaceApi)]
+pub struct SMInterface(pub SMInterfacePtr);
 
 pub type IFeatureProviderPtr = *mut *mut IFeatureProviderVtable;
 
@@ -491,7 +487,7 @@ pub struct IShareSysVtable {
 
 #[derive(Debug)]
 pub enum RequestInterfaceError {
-    StringError(NulError),
+    InvalidNameError(NulError),
     InterfaceError(),
 }
 
@@ -499,8 +495,14 @@ pub enum RequestInterfaceError {
 pub struct IShareSys(pub IShareSysPtr);
 
 impl IShareSys {
-    pub fn request_interface(&self, myself: &IExtension, name: &str, version: u32) -> Result<SMInterface, RequestInterfaceError> {
-        let c_name = CString::new(name).map_err(RequestInterfaceError::StringError)?;
+    pub fn request_interface<I: RequestableInterface>(&self, myself: &IExtension) -> Result<I, RequestInterfaceError> {
+        let iface = self.request_raw_interface(myself, I::get_interface_name(), I::get_interface_version())?;
+
+        unsafe { Ok(I::from_raw_interface(iface)) }
+    }
+
+    pub fn request_raw_interface(&self, myself: &IExtension, name: &str, version: u32) -> Result<SMInterface, RequestInterfaceError> {
+        let c_name = CString::new(name).map_err(RequestInterfaceError::InvalidNameError)?;
 
         unsafe {
             let mut iface: SMInterfacePtr = null_mut();
@@ -516,7 +518,7 @@ impl IShareSys {
 
     /// # Safety
     ///
-    /// This is should be be used via the [`register_natives!`] macro only.
+    /// This should be be used via the [`register_natives!`] macro only.
     pub unsafe fn add_natives(&self, myself: &IExtension, natives: *const NativeInfo) {
         virtual_call!(AddNatives, self.0, myself.0, natives)
     }
@@ -527,7 +529,7 @@ pub type IPluginContextPtr = *mut *mut IPluginContextVtable;
 #[vtable(IPluginContextPtr)]
 pub struct IPluginContextVtable {
     _Destructor: fn() -> (),
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     _Destructor2: fn() -> (),
     _GetVirtualMachine: fn(),
     _GetContext: fn(),
@@ -622,6 +624,94 @@ impl IPluginContext {
         }
     }
 }
+
+/// Defines how a forward iterates through plugin functions.
+#[repr(C)]
+pub enum ExecType {
+    /// Ignore all return values, return 0
+    Ignore = 0,
+    /// Only return the last exec, ignore all others
+    Single = 1,
+    /// Acts as an event with the ResultTypes above, no mid-Stops allowed, returns highest
+    Event = 2,
+    /// Acts as a hook with the ResultTypes above, mid-Stops allowed, returns highest
+    Hook = 3,
+    /// Same as Event except that it returns the lowest value
+    LowEvent = 4,
+}
+
+/// Describes the various ways to pass parameters to plugins.
+#[repr(C)]
+pub enum ParamType {
+    /// Any data type can be pushed
+    Any = 0,
+    /// Only basic cells can be pushed
+    Cell = (1 << 1),
+    /// Only floats can be pushed
+    Float = (2 << 1),
+    /// Only strings can be pushed
+    String = (3 << 1) | 1,
+    /// Only arrays can be pushed
+    Array = (4 << 1) | 1,
+    /// Same as "..." in plugins, anything can be pushed, but it will always be byref
+    VarArgs = (5 << 1),
+    /// Only a cell by reference can be pushed
+    CellByRef = (1 << 1) | 1,
+    /// Only a float by reference can be pushed
+    FloatByRef = (2 << 1) | 1,
+}
+
+pub type IForwardPtr = *mut *mut IForwardVtable;
+
+#[vtable(IForwardPtr)]
+pub struct IForwardVtable {
+    // ICallable
+    pub PushCell: fn(cell: cell_t) -> c_int,
+    pub PushCellByRef: fn(cell: *mut cell_t, flags: c_int) -> c_int,
+    pub PushFloat: fn(number: f32) -> c_int,
+    pub PushFloatByRef: fn(number: *mut f32, flags: c_int) -> c_int,
+    pub PushArray: fn(cell: *mut cell_t, cells: c_uint, flags: c_int) -> c_int,
+    pub PushString: fn(string: *const c_char) -> c_int,
+    pub PushStringEx: fn(string: *const c_char, length: size_t, sz_flags: c_int, cp_flags: c_int) -> c_int,
+    pub Cancel: fn(),
+
+    // IForward
+    _Destructor: fn() -> (),
+    #[cfg(not(windows))]
+    _Destructor2: fn() -> (),
+    pub GetForwardName: fn() -> *const c_char,
+    pub GetFunctionCount: fn() -> c_uint,
+    pub GetExecType: fn() -> ExecType,
+    pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> i32,
+}
+
+#[derive(Debug)]
+pub struct IForward(pub IForwardPtr);
+
+impl IForward {}
+
+// TODO: Type alias until it is properly implemented
+pub type IChangeableForwardPtr = IForwardPtr;
+
+pub type IForwardManagerPtr = *mut *mut IForwardManagerVtable;
+
+#[vtable(IForwardManagerPtr)]
+pub struct IForwardManagerVtable {
+    // SMInterface
+    pub GetInterfaceVersion: fn() -> c_uint,
+    pub GetInterfaceName: fn() -> *const c_char,
+    pub IsVersionCompatible: fn(version: c_uint) -> bool,
+
+    // IForwardManager
+    pub CreateForward: fn(name: *const c_char, et: ExecType, num_params: c_uint, types: *const ParamType, ...) -> IForwardPtr,
+    pub CreateForwardEx: fn(name: *const c_char, et: ExecType, num_params: c_uint, types: *const ParamType, ...) -> IChangeableForwardPtr,
+    pub FindForward: fn(name: *const c_char, *mut IChangeableForwardPtr) -> IForwardPtr,
+    pub ReleaseForward: fn(forward: IForwardPtr) -> (),
+}
+
+#[derive(Debug, SMInterfaceApi)]
+#[interface("IForwardManager", 4)]
+pub struct IForwardManager(pub IForwardManagerPtr);
 
 /// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
 /// virtual calls on Windows without compiler support for the `thiscall` calling convention.

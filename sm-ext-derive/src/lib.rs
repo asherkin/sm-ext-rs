@@ -233,6 +233,92 @@ impl MetadataInput {
     }
 }
 
+#[proc_macro_derive(SMInterfaceApi, attributes(interface))]
+pub fn derive_interface_api(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    let ident = input.ident;
+
+    let attribute = input.attrs.iter().find_map(|attr| match attr.parse_meta() {
+        Ok(m) => {
+            if m.path().is_ident("interface") {
+                Some(m)
+            } else {
+                None
+            }
+        }
+        Err(e) => panic!("unable to parse attribute: {}", e),
+    });
+
+    let mut output = TokenStream::new();
+
+    if let Some(attribute) = attribute {
+        let nested = match attribute {
+            syn::Meta::List(inner) => inner.nested,
+            _ => panic!("attribute 'interface' has incorrect type"),
+        };
+
+        if nested.len() != 2 {
+            panic!("attribute 'interface' expected 2 params: name, version")
+        }
+
+        let interface_name = match &nested[0] {
+            syn::NestedMeta::Lit(lit) => match lit {
+                syn::Lit::Str(str) => str,
+                _ => panic!("attribute 'interface' param 1 should be a string"),
+            },
+            _ => panic!("attribute 'interface' param 1 should be a literal string"),
+        };
+
+        let interface_version = match &nested[1] {
+            syn::NestedMeta::Lit(lit) => match lit {
+                syn::Lit::Int(int) => int,
+                _ => panic!("attribute 'interface' param 2 should be an integer"),
+            },
+            _ => panic!("attribute 'interface' param 2 should be a literal integer"),
+        };
+
+        output.extend(quote! {
+            impl RequestableInterface for #ident {
+                fn get_interface_name() -> &'static str {
+                    #interface_name
+                }
+
+                fn get_interface_version() -> u32 {
+                    #interface_version
+                }
+
+                #[allow(clippy::transmute_ptr_to_ptr)]
+                unsafe fn from_raw_interface(iface: SMInterface) -> #ident {
+                    #ident(std::mem::transmute(iface.0))
+                }
+            }
+        });
+    }
+
+    output.extend(quote! {
+        impl SMInterfaceApi for #ident {
+            fn get_interface_version(&self) -> u32 {
+                unsafe { virtual_call!(GetInterfaceVersion, self.0) }
+            }
+
+            fn get_interface_name(&self) -> &str {
+                unsafe {
+                    let c_name = virtual_call!(GetInterfaceName, self.0);
+
+                    CStr::from_ptr(c_name).to_str().unwrap()
+                }
+            }
+
+            fn is_version_compatible(&self, version: u32) -> bool {
+                unsafe { virtual_call!(IsVersionCompatible, self.0, version) }
+            }
+        }
+    });
+
+    output.into()
+}
+
 /// Declares a function as a native callback and generates internal support code.
 ///
 /// A valid native callback must be a free function that is not async, not unsafe, not extern, has
