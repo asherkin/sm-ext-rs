@@ -20,5 +20,13 @@ path = "sm-ext-derive"
 [workspace]
 
 [[example]]
-name = "simple"
+name = "basic"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "natives"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "forwards"
 crate-type = ["cdylib"]
