@@ -4,26 +4,32 @@
 
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString, NulError};
-use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
+use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::null_mut;
 use std::str::Utf8Error;
 
 pub use c_str_macro::c_str;
 pub use libc::size_t;
 
-pub use sm_ext_derive::{native, vtable, vtable_override, ICallableApi, SMExtension, SMInterfaceApi};
+pub use sm_ext_derive::{forwards, native, vtable, vtable_override, ICallableApi, SMExtension, SMInterfaceApi};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
 
-// TODO: This should be a checked enum.
-#[repr(transparent)]
-pub struct FeatureType(c_uchar);
+#[repr(C)]
+pub enum FeatureType {
+    Native = 0,
+    Capability = 1,
+}
 
-// TODO: This should be a checked enum.
-#[repr(transparent)]
-pub struct FeatureStatus(c_uchar);
+#[repr(C)]
+pub enum FeatureStatus {
+    Available = 0,
+    Unavailable = 1,
+    Unknown = 2,
+}
 
+// TODO: Investigate using a `union` for this instead.
 /// Wrapper type that represents a value from SourcePawn.
 ///
 /// Could be a [`i32`], [`f32`], `&i32`, `&f32`, or `&i8` (for character strings).
@@ -794,9 +800,46 @@ pub struct IForwardVtable {
     pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> SPError,
 }
 
+pub trait CallableParam {
+    fn push(&self, fwd: &IForward) -> Result<(), SPError>;
+    fn param_type() -> ParamType;
+}
+
+impl CallableParam for i32 {
+    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
+        fwd.push_int(*self)
+    }
+
+    fn param_type() -> ParamType {
+        ParamType::Cell
+    }
+}
+
+impl CallableParam for f32 {
+    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
+        fwd.push_float(*self)
+    }
+
+    fn param_type() -> ParamType {
+        ParamType::Float
+    }
+}
+
+impl CallableParam for CStr {
+    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
+        fwd.push_string(self)
+    }
+
+    fn param_type() -> ParamType {
+        ParamType::String
+    }
+}
+
 // TODO: This interface is very, very rough.
 pub trait ICallableApi {
     fn push_int(&self, cell: i32) -> Result<(), SPError>;
+    fn push_float(&self, number: f32) -> Result<(), SPError>;
+    fn push_string(&self, string: &CStr) -> Result<(), SPError>;
 }
 
 #[derive(Debug, ICallableApi)]
@@ -843,7 +886,7 @@ pub struct IForwardManagerVtable {
 #[derive(Debug)]
 pub enum CreateForwardError {
     InvalidName(NulError),
-    Other,
+    InvalidParams,
 }
 
 #[derive(Debug, SMInterfaceApi)]
@@ -851,14 +894,14 @@ pub enum CreateForwardError {
 pub struct IForwardManager(pub IForwardManagerPtr);
 
 impl IForwardManager {
-    pub fn create_raw_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
+    pub fn create_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
         let c_name = CString::new(name).map_err(CreateForwardError::InvalidName)?;
 
         unsafe {
             let forward = virtual_call_varargs!(CreateForward, self.0, c_name.as_ptr(), et, params.len() as u32, params.as_ptr());
 
             if forward.is_null() {
-                Err(CreateForwardError::Other)
+                Err(CreateForwardError::InvalidParams)
             } else {
                 Ok(IForward(forward, self.0))
             }
@@ -910,12 +953,9 @@ macro_rules! virtual_call {
     };
 }
 
-/// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
-/// virtual calls on Windows without compiler support for the `thiscall` calling convention.
-///
-/// Identical to the non-fastcall-hack version above, but for calling functions that use varargs.
-///
-/// TODO: Figure out a way to make this type-safe (and hopefully avoid the need for it completely.)
+// TODO: Figure out a way to make this type-safe (and hopefully avoid the need for it completely.)
+/// Helper for varargs-using virtual function invocation that works with the `#[vtable]` attribute to
+/// support virtual calls on Windows without compiler support for the `thiscall` calling convention.
 #[macro_export]
 macro_rules! virtual_call_varargs {
     ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
