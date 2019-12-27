@@ -20,26 +20,53 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, native, register_natives, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
+use sm_ext::{c_str, native, register_natives, HandleError, HandleId, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
+use std::cell::RefCell;
 use std::ffi::CString;
 
+struct RustContext(i32);
+
+thread_local! {
+    static HANDLE_TYPE: RefCell<Option<HandleType<RustContext>>> = RefCell::new(None);
+}
+
 #[native]
-fn native_obj_new(_ctx: &IPluginContext) -> i32 {
+fn native_obj_new(ctx: &IPluginContext) -> Result<HandleId, HandleError> {
     println!(">>> Rust.Rust()");
 
-    0
+    HANDLE_TYPE.with(|ty| {
+        let ty = ty.borrow();
+        let ty = ty.as_ref().unwrap();
+        ty.create(RustContext(0), ctx.get_identity())
+    })
 }
 
 #[native]
-fn native_obj_add(_ctx: &IPluginContext, this: i32, number: i32) {
+fn native_obj_add(ctx: &IPluginContext, this: HandleId, number: i32) -> Result<(), HandleError> {
     println!(">>> Rust.Add({:?}, {:?})", this, number);
+
+    HANDLE_TYPE.with(|ty| -> Result<(), HandleError> {
+        let ty = ty.borrow();
+        let ty = ty.as_ref().unwrap();
+        let this = ty.read(this, ctx.get_identity())?;
+
+        this.0 += number;
+
+        Ok(())
+    })
 }
 
 #[native]
-fn native_obj_result(_ctx: &IPluginContext, this: i32) -> i32 {
+fn native_obj_result(ctx: &IPluginContext, this: HandleId) -> Result<i32, HandleError> {
     println!(">>> Rust.Result({:?})", this);
 
-    0
+    HANDLE_TYPE.with(|ty| -> Result<i32, HandleError> {
+        let ty = ty.borrow();
+        let ty = ty.as_ref().unwrap();
+        let this = ty.read(this, ctx.get_identity())?;
+
+        Ok(this.0)
+    })
 }
 
 #[derive(Default, SMExtension)]
@@ -53,6 +80,11 @@ impl IExtensionInterface for MyExtension {
         let handlesys: IHandleSys = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IHandleSys interface"))?;
         println!(">>> Got interface: {:?} v{:?}", handlesys.get_interface_name(), handlesys.get_interface_version());
 
+        let handle_type: HandleType<RustContext> = handlesys.create_type("RustContext", myself.get_identity()).map_err(|_| c_str!("Failed to create RustContext Handle type"))?;
+        HANDLE_TYPE.with(|ty| {
+            *ty.borrow_mut() = Some(handle_type);
+        });
+
         register_natives!(
             &sys,
             &myself,
@@ -64,5 +96,11 @@ impl IExtensionInterface for MyExtension {
         );
 
         Ok(())
+    }
+
+    fn on_extension_unload(&mut self) {
+        HANDLE_TYPE.with(|ty| {
+            *ty.borrow_mut() = None;
+        });
     }
 }

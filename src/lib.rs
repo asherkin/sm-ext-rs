@@ -5,7 +5,7 @@
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString, NulError};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::str::Utf8Error;
 
 pub use c_str_macro::c_str;
@@ -688,7 +688,7 @@ pub struct IPluginContextVtable {
     pub ThrowNativeError: fn(*const c_char, ...) -> cell_t,
     _GetFunctionByName: fn(),
     _GetFunctionById: fn(),
-    _GetIdentity: fn(),
+    pub GetIdentity: fn() -> IdentityTokenPtr,
     _GetNullRef: fn(),
     _LocalToStringNULL: fn(),
     _BindNativeToIndex: fn(),
@@ -715,12 +715,6 @@ pub struct IPluginContextVtable {
 pub struct IPluginContext(pub IPluginContextPtr);
 
 impl IPluginContext {
-    pub fn throw_native_error(&self, err: String) -> cell_t {
-        let fmt = c_str!("%s");
-        let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
-        unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
-    }
-
     pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, SPError> {
         unsafe {
             let mut addr: *mut cell_t = null_mut();
@@ -743,6 +737,16 @@ impl IPluginContext {
                 _ => Err(res),
             }
         }
+    }
+
+    pub fn throw_native_error(&self, err: String) -> cell_t {
+        let fmt = c_str!("%s");
+        let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
+        unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
+    }
+
+    pub fn get_identity(&self) -> IdentityTokenPtr {
+        unsafe { virtual_call!(GetIdentity, self.0) }
     }
 }
 
@@ -923,10 +927,24 @@ impl IForwardManager {
 }
 
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct HandleTypeId(c_uint);
 
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct HandleId(c_uint);
+
+impl From<cell_t> for HandleId {
+    fn from(x: cell_t) -> Self {
+        Self(x.0 as u32)
+    }
+}
+
+impl From<HandleId> for cell_t {
+    fn from(x: HandleId) -> Self {
+        Self(x.0 as i32)
+    }
+}
 
 /// Lists the possible handle error codes.
 #[repr(C)]
@@ -988,13 +1006,67 @@ pub struct IHandleTypeDispatchVtable {
     pub GetHandleApproxSize: fn(ty: HandleTypeId, object: *mut c_void, size: *mut c_uint) -> bool,
 }
 
+#[repr(C)]
+pub struct IHandleTypeDispatchAdapter<T> {
+    vtable: *mut IHandleTypeDispatchVtable,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Drop for IHandleTypeDispatchAdapter<T> {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.vtable));
+        }
+    }
+}
+
+impl<T> Default for IHandleTypeDispatchAdapter<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> IHandleTypeDispatchAdapter<T> {
+    pub fn new() -> IHandleTypeDispatchAdapter<T> {
+        let vtable = IHandleTypeDispatchVtable {
+            GetDispatchVersion: IHandleTypeDispatchAdapter::<T>::get_dispatch_version,
+            OnHandleDestroy: IHandleTypeDispatchAdapter::<T>::on_handle_destroy,
+            GetHandleApproxSize: IHandleTypeDispatchAdapter::<T>::get_handle_approx_size,
+        };
+
+        IHandleTypeDispatchAdapter { vtable: Box::into_raw(Box::new(vtable)), phantom: std::marker::PhantomData }
+    }
+
+    #[vtable_override]
+    unsafe fn get_dispatch_version(this: IHandleTypeDispatchPtr) -> u32 {
+        <IHandleSys as RequestableInterface>::get_interface_version()
+    }
+
+    #[vtable_override]
+    unsafe fn on_handle_destroy(this: IHandleTypeDispatchPtr, ty: HandleTypeId, object: *mut c_void) {
+        drop(Box::from_raw(object as *mut T));
+    }
+
+    #[vtable_override]
+    unsafe fn get_handle_approx_size(this: IHandleTypeDispatchPtr, ty: HandleTypeId, object: *mut c_void, size: *mut c_uint) -> bool {
+        false
+    }
+}
+
 /// This pair of tokens is used for identification.
 #[repr(C)]
+#[derive(Debug)]
 pub struct HandleSecurity {
     /// Owner of the Handle
     pub owner: IdentityTokenPtr,
     /// Owner of the Type
     pub identity: IdentityTokenPtr,
+}
+
+impl HandleSecurity {
+    pub fn new(owner: IdentityTokenPtr, identity: IdentityTokenPtr) -> Self {
+        Self { owner, identity }
+    }
 }
 
 pub type IHandleSysPtr = *mut *mut IHandleSysVtable;
@@ -1020,11 +1092,91 @@ pub struct IHandleSysVtable {
     pub TypeCheck: fn(given: HandleTypeId, actual: HandleTypeId) -> bool,
 }
 
+#[derive(Debug)]
+pub struct HandleType<T> {
+    iface: IHandleSysPtr,
+    id: HandleTypeId,
+    dispatch: *mut IHandleTypeDispatchAdapter<T>,
+    ident: IdentityTokenPtr,
+}
+
+impl<T> Drop for HandleType<T> {
+    fn drop(&mut self) {
+        IHandleSys(self.iface).remove_type(self).unwrap();
+
+        unsafe {
+            drop(Box::from_raw(self.dispatch));
+        }
+    }
+}
+
+impl<T> HandleType<T> {
+    pub fn create(&self, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        IHandleSys(self.iface).create_handle(self, object, owner)
+    }
+
+    pub fn read(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<&mut T, HandleError> {
+        IHandleSys(self.iface).read_handle(self, handle, owner)
+    }
+}
+
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IHandleSys", 5)]
 pub struct IHandleSys(pub IHandleSysPtr);
 
-impl IHandleSys {}
+impl IHandleSys {
+    pub fn create_type<T>(&self, name: &str, ident: IdentityTokenPtr) -> Result<HandleType<T>, HandleError> {
+        unsafe {
+            let c_name = CString::new(name).unwrap(); // TODO
+            let dispatch = Box::into_raw(Box::new(IHandleTypeDispatchAdapter::<T>::new()));
+            let mut err: HandleError = HandleError::None;
+            let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId(0), null(), null(), ident, &mut err);
+            // TODO: Add constants for null IDs
+            if id.0 == 0 {
+                Err(err)
+            } else {
+                Ok(HandleType { iface: self.0, id, dispatch, ident })
+            }
+        }
+    }
+
+    fn remove_type<T>(&self, ty: &mut HandleType<T>) -> Result<(), bool> {
+        unsafe {
+            if virtual_call!(RemoveType, self.0, HandleTypeId(ty.id.0), ty.ident) {
+                Ok(())
+            } else {
+                Err(false)
+            }
+        }
+    }
+
+    fn create_handle<T>(&self, ty: &HandleType<T>, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        unsafe {
+            let object = Box::into_raw(Box::new(object)) as *mut c_void;
+            let security = HandleSecurity::new(owner, ty.ident);
+            let mut err: HandleError = HandleError::None;
+            let id = virtual_call!(CreateHandleEx, self.0, HandleTypeId(ty.id.0), object, &security, null(), &mut err);
+            // TODO: Add constants for null IDs
+            if id.0 == 0 {
+                Err(err)
+            } else {
+                Ok(id)
+            }
+        }
+    }
+
+    fn read_handle<'a, T>(&self, ty: &'a HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
+        unsafe {
+            let security = HandleSecurity::new(owner, ty.ident);
+            let mut object: *mut c_void = null_mut();
+            let err = virtual_call!(ReadHandle, self.0, handle, HandleTypeId(ty.id.0), &security, &mut object);
+            match err {
+                HandleError::None => Ok(&mut *(object as *mut T)),
+                _ => Err(err),
+            }
+        }
+    }
+}
 
 /// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
 /// virtual calls on Windows without compiler support for the `thiscall` calling convention.
