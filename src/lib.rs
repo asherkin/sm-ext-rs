@@ -189,6 +189,8 @@ pub struct IExtensionInterfaceVtable {
     pub OnCoreMapEnd: fn() -> (),
 }
 
+// There appears to be a bug with the MSVC linker in release mode dropping these symbols when threaded
+// compilation is enabled - if you run into undefined symbol errors here try setting code-units to 1.
 pub trait IExtensionInterface {
     fn on_extension_load(&mut self, me: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
         Ok(())
@@ -446,6 +448,10 @@ pub struct SMInterfaceVtable {
 pub trait RequestableInterface {
     fn get_interface_name() -> &'static str;
     fn get_interface_version() -> u32;
+
+    /// # Safety
+    ///
+    /// Only for use internally by [`IShareSys::request_interface`], which always knows the correct type.
     unsafe fn from_raw_interface(iface: SMInterface) -> Self;
 }
 
@@ -916,33 +922,119 @@ impl IForwardManager {
     }
 }
 
-/// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
-/// virtual calls on Windows without compiler support for the `thiscall` calling convention.
-#[macro_export]
-#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]
-macro_rules! virtual_call {
-    ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
-        ((**$this).$name)(
-            $this,
-            std::ptr::null_mut(),
-            $(
-                $param,
-            )*
-        )
-    };
-    ($name:ident, $this:expr) => {
-        virtual_call!($name, $this, )
-    };
+#[repr(transparent)]
+pub struct HandleTypeId(c_uint);
+
+#[repr(transparent)]
+pub struct HandleId(c_uint);
+
+/// Lists the possible handle error codes.
+#[repr(C)]
+#[derive(Debug)]
+pub enum HandleError {
+    /// No error
+    None = 0,
+    /// The handle has been freed and reassigned
+    Changed = 1,
+    /// The handle has a different type registered
+    Type = 2,
+    /// The handle has been freed
+    Freed = 3,
+    /// Generic internal indexing error
+    Index = 4,
+    /// No access permitted to free this handle
+    Access = 5,
+    /// The limited number of handles has been reached
+    Limit = 6,
+    /// The identity token was not usable
+    Identity = 7,
+    /// Owners do not match for this operation
+    Owner = 8,
+    /// Unrecognized security structure version
+    Version = 9,
+    /// An invalid parameter was passed
+    Parameter = 10,
+    /// This type cannot be inherited
+    NoInherit = 11,
 }
+
+impl std::fmt::Display for HandleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.pad(match self {
+            HandleError::None => "No error",
+            HandleError::Changed => "The handle has been freed and reassigned",
+            HandleError::Type => "The handle has a different type registered",
+            HandleError::Freed => "The handle has been freed",
+            HandleError::Index => "Generic internal indexing error",
+            HandleError::Access => "No access permitted to free this handle",
+            HandleError::Limit => "The limited number of handles has been reached",
+            HandleError::Identity => "The identity token was not usable",
+            HandleError::Owner => "Owners do not match for this operation",
+            HandleError::Version => "Unrecognized security structure version",
+            HandleError::Parameter => "An invalid parameter was passed",
+            HandleError::NoInherit => "This type cannot be inherited",
+        })
+    }
+}
+
+impl std::error::Error for HandleError {}
+
+pub type IHandleTypeDispatchPtr = *mut *mut IHandleTypeDispatchVtable;
+
+#[vtable(IHandleTypeDispatchPtr)]
+pub struct IHandleTypeDispatchVtable {
+    pub GetDispatchVersion: fn() -> c_uint,
+    pub OnHandleDestroy: fn(ty: HandleTypeId, object: *mut c_void) -> (),
+    pub GetHandleApproxSize: fn(ty: HandleTypeId, object: *mut c_void, size: *mut c_uint) -> bool,
+}
+
+/// This pair of tokens is used for identification.
+#[repr(C)]
+pub struct HandleSecurity {
+    /// Owner of the Handle
+    pub owner: IdentityTokenPtr,
+    /// Owner of the Type
+    pub identity: IdentityTokenPtr,
+}
+
+pub type IHandleSysPtr = *mut *mut IHandleSysVtable;
+
+#[vtable(IHandleSysPtr)]
+pub struct IHandleSysVtable {
+    // SMInterface
+    pub GetInterfaceVersion: fn() -> c_uint,
+    pub GetInterfaceName: fn() -> *const c_char,
+    pub IsVersionCompatible: fn(version: c_uint) -> bool,
+
+    // IHandleSys
+    pub CreateType: fn(name: *const c_char, dispatch: IHandleTypeDispatchPtr, parent: HandleTypeId, typeAccess: *const c_void, handleAccess: *const c_void, ident: IdentityTokenPtr, err: *mut HandleError) -> HandleTypeId,
+    pub RemoveType: fn(ty: HandleTypeId, ident: IdentityTokenPtr) -> bool,
+    pub FindHandleType: fn(name: *const c_char, ty: *mut HandleTypeId) -> bool,
+    pub CreateHandle: fn(ty: HandleTypeId, object: *mut c_void, owner: IdentityTokenPtr, ident: IdentityTokenPtr, err: *mut HandleError) -> HandleId,
+    pub FreeHandle: fn(handle: HandleId, security: *const HandleSecurity) -> HandleError,
+    pub CloneHandle: fn(handle: HandleId, newHandle: *mut HandleId, newOwner: IdentityTokenPtr, security: *const HandleSecurity) -> HandleError,
+    pub ReadHandle: fn(handle: HandleId, ty: HandleTypeId, security: *const HandleSecurity, object: *mut *mut c_void) -> HandleError,
+    pub InitAccessDefaults: fn(typeAccess: *mut c_void, handleAccess: *mut c_void) -> bool,
+    pub CreateHandleEx: fn(ty: HandleTypeId, object: *mut c_void, security: *const HandleSecurity, access: *const c_void, err: *mut HandleError) -> HandleId,
+    pub FastCloneHandle: fn(handle: HandleId) -> HandleId,
+    pub TypeCheck: fn(given: HandleTypeId, actual: HandleTypeId) -> bool,
+}
+
+#[derive(Debug, SMInterfaceApi)]
+#[interface("IHandleSys", 5)]
+pub struct IHandleSys(pub IHandleSysPtr);
+
+impl IHandleSys {}
 
 /// Helper for virtual function invocation that works with the `#[vtable]` attribute to support
 /// virtual calls on Windows without compiler support for the `thiscall` calling convention.
 #[macro_export]
-#[cfg(not(all(windows, target_arch = "x86", not(feature = "thiscall"))))]
 macro_rules! virtual_call {
     ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
         ((**$this).$name)(
             $this,
+            #[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]
+            std::ptr::null_mut(),
             $(
                 $param,
             )*

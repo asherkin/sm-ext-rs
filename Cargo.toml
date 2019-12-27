@@ -30,3 +30,7 @@ crate-type = ["cdylib"]
 [[example]]
 name = "forwards"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "handles"
+crate-type = ["cdylib"]
