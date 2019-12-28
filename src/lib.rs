@@ -1049,7 +1049,11 @@ impl<T> IHandleTypeDispatchAdapter<T> {
 
     #[vtable_override]
     unsafe fn get_handle_approx_size(this: IHandleTypeDispatchPtr, ty: HandleTypeId, object: *mut c_void, size: *mut c_uint) -> bool {
-        false
+        // This isn't ideal as it doesn't account for dynamic sizes, probably need to add a trait at some point
+        // for people to implement this properly. See also: https://github.com/rust-lang/rust/issues/63073
+        let object = object as *mut T;
+        *size = std::mem::size_of_val(&*object) as u32;
+        true
     }
 }
 
