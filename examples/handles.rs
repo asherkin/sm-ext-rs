@@ -20,53 +20,61 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, native, register_natives, HandleError, HandleId, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
+use sm_ext::{c_str, cell_t, native, register_natives, HandleError, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryFromPlugin, TryIntoPlugin};
 use std::cell::RefCell;
 use std::ffi::CString;
 
+#[derive(Debug)]
 struct RustContext(i32);
 
 thread_local! {
     static HANDLE_TYPE: RefCell<Option<HandleType<RustContext>>> = RefCell::new(None);
 }
 
+impl<'a> TryFromPlugin<'a, cell_t> for &'a mut RustContext {
+    type Error = HandleError;
+
+    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+        HANDLE_TYPE.with(|ty| -> Result<&'a mut RustContext, HandleError> {
+            let ty = ty.borrow();
+            let ty = ty.as_ref().unwrap();
+            ty.read(value.into(), ctx.get_identity())
+        })
+    }
+}
+
+impl<'a> TryIntoPlugin<'a, cell_t> for RustContext {
+    type Error = HandleError;
+
+    fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<cell_t, Self::Error> {
+        HANDLE_TYPE.with(|ty| {
+            let ty = ty.borrow();
+            let ty = ty.as_ref().unwrap();
+            let handle = ty.create(self, ctx.get_identity())?;
+            Ok(handle.into())
+        })
+    }
+}
+
 #[native]
-fn native_obj_new(ctx: &IPluginContext) -> Result<HandleId, HandleError> {
+fn native_obj_new(_ctx: &IPluginContext) -> RustContext {
     println!(">>> Rust.Rust()");
 
-    HANDLE_TYPE.with(|ty| {
-        let ty = ty.borrow();
-        let ty = ty.as_ref().unwrap();
-        ty.create(RustContext(0), ctx.get_identity())
-    })
+    RustContext(0)
 }
 
 #[native]
-fn native_obj_add(ctx: &IPluginContext, this: HandleId, number: i32) -> Result<(), HandleError> {
+fn native_obj_add(_ctx: &IPluginContext, this: &mut RustContext, number: i32) {
     println!(">>> Rust.Add({:?}, {:?})", this, number);
 
-    HANDLE_TYPE.with(|ty| -> Result<(), HandleError> {
-        let ty = ty.borrow();
-        let ty = ty.as_ref().unwrap();
-        let this = ty.read(this, ctx.get_identity())?;
-
-        this.0 += number;
-
-        Ok(())
-    })
+    this.0 += number;
 }
 
 #[native]
-fn native_obj_result(ctx: &IPluginContext, this: HandleId) -> Result<i32, HandleError> {
+fn native_obj_result(_ctx: &IPluginContext, this: &mut RustContext) -> i32 {
     println!(">>> Rust.Result({:?})", this);
 
-    HANDLE_TYPE.with(|ty| -> Result<i32, HandleError> {
-        let ty = ty.borrow();
-        let ty = ty.as_ref().unwrap();
-        let this = ty.read(this, ctx.get_identity())?;
-
-        Ok(this.0)
-    })
+    this.0
 }
 
 #[derive(Default, SMExtension)]

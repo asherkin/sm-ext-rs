@@ -1119,7 +1119,7 @@ impl<T> HandleType<T> {
         IHandleSys(self.iface).create_handle(self, object, owner)
     }
 
-    pub fn read(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<&mut T, HandleError> {
+    pub fn read<'a>(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
         IHandleSys(self.iface).read_handle(self, handle, owner)
     }
 }
@@ -1169,7 +1169,7 @@ impl IHandleSys {
         }
     }
 
-    fn read_handle<'a, T>(&self, ty: &'a HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
+    fn read_handle<'a, T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
         unsafe {
             let security = HandleSecurity::new(owner, ty.ident);
             let mut object: *mut c_void = null_mut();
