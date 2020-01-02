@@ -44,7 +44,7 @@ impl std::fmt::Display for cell_t {
 }
 
 /// Trait to support conversions to/from [`cell_t`] that require an [`IPluginContext`] for access to plugin memory.
-pub trait TryFromPlugin<'a, T>: Sized {
+pub trait TryFromPlugin<'a, T = cell_t>: Sized {
     type Error;
 
     fn try_from_plugin(ctx: &'a crate::IPluginContext, value: T) -> Result<Self, Self::Error>;
@@ -65,7 +65,7 @@ where
 ///
 /// As with Rust's [`TryInto`](std::convert::TryInto) and [`TryFrom`](std::convert::TryFrom), this is implemented automatically
 /// for types that implement [`TryFromPlugin`] which you should prefer to implement instead.
-pub trait TryIntoPlugin<'a, T>: Sized {
+pub trait TryIntoPlugin<'a, T = cell_t>: Sized {
     type Error;
 
     fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<T, Self::Error>;
@@ -106,7 +106,7 @@ impl From<cell_t> for f32 {
     }
 }
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a CStr {
+impl<'a> TryFromPlugin<'a> for &'a CStr {
     type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -114,7 +114,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a CStr {
     }
 }
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a str {
+impl<'a> TryFromPlugin<'a> for &'a str {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -124,7 +124,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a str {
 
 // TODO: These &mut implementations seem risky, maybe a SPRef/SPString/SPArray wrapper object would be a better way to go...
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a mut cell_t {
+impl<'a> TryFromPlugin<'a> for &'a mut cell_t {
     type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -132,7 +132,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a mut cell_t {
     }
 }
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a mut i32 {
+impl<'a> TryFromPlugin<'a> for &'a mut i32 {
     type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -141,7 +141,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a mut i32 {
     }
 }
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a mut f32 {
+impl<'a> TryFromPlugin<'a> for &'a mut f32 {
     type Error = SPError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {

@@ -31,7 +31,7 @@ thread_local! {
     static HANDLE_TYPE: RefCell<Option<HandleType<RustContext>>> = RefCell::new(None);
 }
 
-impl<'a> TryFromPlugin<'a, cell_t> for &'a mut RustContext {
+impl<'a> TryFromPlugin<'a> for &'a mut RustContext {
     type Error = HandleError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -43,7 +43,7 @@ impl<'a> TryFromPlugin<'a, cell_t> for &'a mut RustContext {
     }
 }
 
-impl<'a> TryIntoPlugin<'a, cell_t> for RustContext {
+impl<'a> TryIntoPlugin<'a> for RustContext {
     type Error = HandleError;
 
     fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<cell_t, Self::Error> {
