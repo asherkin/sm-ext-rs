@@ -2,9 +2,13 @@
 name = "sm-ext"
 version = "0.1.0"
 authors = ["Asher Baker <asherkin@limetech.io>"]
-description = "Helpers for writing SourceMod Extensions in Rust"
-readme = "README.md"
 edition = "2018"
+description = "Helpers for writing SourceMod Extensions in Rust"
+repository = "https://github.com/asherkin/sm-ext-rs"
+readme = "README.md"
+keywords = ["sourcemod"]
+categories = ["api-bindings"]
+license = "GPL-3.0-or-later"
 
 [features]
 default = []

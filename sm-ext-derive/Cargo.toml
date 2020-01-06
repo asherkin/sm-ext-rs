@@ -2,9 +2,11 @@
 name = "sm-ext-derive"
 version = "0.1.0"
 authors = ["Asher Baker <asherkin@limetech.io>"]
-description = "Procedural macro package for sm-ext helpers"
-workspace = ".."
 edition = "2018"
+workspace = ".."
+description = "Procedural macro package for sm-ext helpers"
+repository = "https://github.com/asherkin/sm-ext-rs"
+license = "GPL-3.0-or-later"
 
 [lib]
 proc-macro = true
@@ -17,7 +19,3 @@ abi_thiscall = []
 quote = "1"
 syn = { version = "1", features = ["full"] }
 proc-macro2 = "1"
-
-[dev-dependencies.sm-ext]
-version = "0.1.0"
-path = ".."

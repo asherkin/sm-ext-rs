@@ -374,7 +374,7 @@ pub fn derive_callable_api(input: proc_macro::TokenStream) -> proc_macro::TokenS
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use sm_ext::{native, IPluginContext};
 ///
 /// #[native]
