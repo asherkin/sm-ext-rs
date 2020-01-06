@@ -3,6 +3,7 @@ name = "sm-ext"
 version = "0.1.0"
 authors = ["Asher Baker <asherkin@limetech.io>"]
 description = "Helpers for writing SourceMod Extensions in Rust"
+readme = "README.md"
 edition = "2018"
 
 [features]
