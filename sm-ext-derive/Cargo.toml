@@ -11,11 +11,11 @@ proc-macro = true
 
 [features]
 default = []
-thiscall = []
+abi_thiscall = []
 
 [dependencies]
 quote = "1"
-syn = { version = "1", features = ["full", "extra-traits"] }
+syn = { version = "1", features = ["full"] }
 proc-macro2 = "1"
 
 [dev-dependencies.sm-ext]

@@ -42,13 +42,13 @@ pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::
         compile_error!("SourceMod requires the Windows CRT to be statically linked (pass `-C target-feature=+crt-static` to rustc)");
 
         #[no_mangle]
-        pub extern "C" fn GetSMExtAPI() -> *mut ::sm_ext::IExtensionInterfaceAdapter<#name> {
+        pub extern "C" fn GetSMExtAPI() -> *mut sm_ext::IExtensionInterfaceAdapter<#name> {
             let delegate: #name = Default::default();
-            let extension = ::sm_ext::IExtensionInterfaceAdapter::new(delegate);
+            let extension = sm_ext::IExtensionInterfaceAdapter::new(delegate);
             Box::into_raw(Box::new(extension))
         }
 
-        impl ::sm_ext::IExtensionMetadata for #name {
+        impl sm_ext::IExtensionMetadata for #name {
             fn get_extension_name(&self) -> &'static ::std::ffi::CStr {
                 #extension_name
             }
@@ -489,7 +489,6 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
     output.into()
 }
 
-#[derive(Debug)]
 struct ForwardInfo {
     ident: syn::Ident,
     name: Option<syn::LitStr>,
@@ -796,7 +795,7 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
     }
 
     input.attrs.pop();
-    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "thiscall"))]));
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "abi_thiscall"))]));
 
     for field in &mut input.fields {
         if let syn::Type::BareFn(ty) = &mut field.ty {
@@ -809,7 +808,7 @@ pub fn vtable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
     output.extend(input.to_token_stream());
 
     input.attrs.pop();
-    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]));
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "abi_thiscall")))]));
 
     for field in &mut input.fields {
         if let syn::Type::BareFn(ty) = &mut field.ty {
@@ -844,14 +843,14 @@ pub fn vtable_override(_attr: proc_macro::TokenStream, item: proc_macro::TokenSt
     output.extend(input.to_token_stream());
 
     input.attrs.pop();
-    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "thiscall"))]));
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", feature = "abi_thiscall"))]));
 
     input.sig.abi = syn::parse_quote!(extern "thiscall");
 
     output.extend(input.to_token_stream());
 
     input.attrs.pop();
-    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]));
+    input.attrs.push(syn::parse_quote!(#[cfg(all(windows, target_arch = "x86", not(feature = "abi_thiscall")))]));
 
     // Add a dummy argument to be passed in edx
     input.sig.inputs.insert(1, syn::parse_quote!(_dummy: *const usize));

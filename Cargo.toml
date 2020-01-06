@@ -7,7 +7,7 @@ edition = "2018"
 
 [features]
 default = []
-thiscall = ["sm-ext-derive/thiscall"]
+abi_thiscall = ["sm-ext-derive/abi_thiscall"]
 
 [dependencies]
 libc = "0.2.66"

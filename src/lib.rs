@@ -1,4 +1,4 @@
-#![cfg_attr(feature = "thiscall", feature(abi_thiscall))]
+#![cfg_attr(feature = "abi_thiscall", feature(abi_thiscall))]
 #![allow(non_snake_case, non_camel_case_types, unused_variables)]
 //! This interface is extremely unstable, everything just lives in a soup at the top level for now.
 
@@ -1189,7 +1189,7 @@ macro_rules! virtual_call {
     ($name:ident, $this:expr, $($param:expr),* $(,)?) => {
         ((**$this).$name)(
             $this,
-            #[cfg(all(windows, target_arch = "x86", not(feature = "thiscall")))]
+            #[cfg(all(windows, target_arch = "x86", not(feature = "abi_thiscall")))]
             std::ptr::null_mut(),
             $(
                 $param,
