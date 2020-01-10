@@ -811,13 +811,13 @@ pub struct IForwardVtable {
 }
 
 pub trait CallableParam {
-    fn push(&self, fwd: &IForward) -> Result<(), SPError>;
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError>;
     fn param_type() -> ParamType;
 }
 
 impl CallableParam for i32 {
-    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
-        fwd.push_int(*self)
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+        callable.push_int(*self)
     }
 
     fn param_type() -> ParamType {
@@ -826,8 +826,8 @@ impl CallableParam for i32 {
 }
 
 impl CallableParam for f32 {
-    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
-        fwd.push_float(*self)
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+        callable.push_float(*self)
     }
 
     fn param_type() -> ParamType {
@@ -835,9 +835,9 @@ impl CallableParam for f32 {
     }
 }
 
-impl CallableParam for CStr {
-    fn push(&self, fwd: &IForward) -> Result<(), SPError> {
-        fwd.push_string(self)
+impl CallableParam for &CStr {
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+        callable.push_string(self)
     }
 
     fn param_type() -> ParamType {
@@ -852,6 +852,14 @@ pub trait ICallableApi {
     fn push_string(&self, string: &CStr) -> Result<(), SPError>;
 }
 
+pub trait ExecutableApi: ICallableApi + Sized {
+    fn execute(&self) -> Result<cell_t, SPError>;
+
+    fn push<T: CallableParam>(&self, param: T) -> Result<(), SPError> {
+        param.push(self)
+    }
+}
+
 #[derive(Debug, ICallableApi)]
 pub struct IForward(pub IForwardPtr, IForwardManagerPtr);
 
@@ -861,8 +869,8 @@ impl Drop for IForward {
     }
 }
 
-impl IForward {
-    pub fn execute(&self) -> Result<cell_t, SPError> {
+impl ExecutableApi for IForward {
+    fn execute(&self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
             let res = virtual_call!(Execute, self.0, &mut result, null_mut());

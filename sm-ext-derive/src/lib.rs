@@ -651,19 +651,16 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         let mut forward_call_pushes = TokenStream::new();
 
         for param in forward.params {
-            let param_type = match &param.ty {
-                syn::Type::Reference(ty) => ty.elem.as_ref(),
-                ty => ty,
-            };
+            let param_type = &param.ty;
             let param_name = &param.name.as_ref().unwrap().0;
             forward_param_types.extend(quote_spanned!(param_type.span() =>
-                #param_type::param_type(),
+                <#param_type>::param_type(),
             ));
             forward_call_args.extend(quote_spanned!(param.span() =>
                 #param,
             ));
             forward_call_pushes.extend(quote_spanned!(param_name.span() =>
-                #param_name.push(self.0)?;
+                self.0.push(#param_name)?;
             ));
         }
 
@@ -680,7 +677,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         output.extend(quote_spanned!(forward.ident.span() =>
             impl #type_ident<'_> {
                 fn execute(&self, #forward_call_args) -> Result<#forward_call_return, sm_ext::SPError> {
-                    use sm_ext::CallableParam;
+                    use sm_ext::ExecutableApi;
                     #forward_call_pushes
                     #execute_return
                 }

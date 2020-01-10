@@ -2,7 +2,7 @@
 //!
 //! ```sourcepawn
 //! native int Rust_Call(int a, int b);
-//! forward int OnRustCall(int a, int b);
+//! forward int OnRustCall(int a, int b, const char[] c);
 //!
 //! public void OnPluginStart()
 //! {
@@ -11,24 +11,24 @@
 //!     PrintToServer(">>> Rust_Call(5, 4) = %d", result);
 //! }
 //!
-//! public int OnRustCall(int a, int b)
+//! public int OnRustCall(int a, int b, const char[] c)
 //! {
-//!     PrintToServer(">>> OnRustCall(%d, %d)", a, b);
+//!     PrintToServer(">>> OnRustCall(%d, %d, %s)", a, b, c);
 //!
 //!     return a + b;
 //! }
 //! ```
 
 use sm_ext::{c_str, forwards, native, register_natives, ExecType, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
 
 #[forwards]
 struct MyForwards {
     /// ```sourcepawn
-    /// forward int OnRustCall(int a, int b);
+    /// forward int OnRustCall(int a, int b, const char[] c);
     /// ```
     #[global_forward("OnRustCall", ExecType::Single)]
-    on_rust_call: fn(a: i32, b: i32) -> i32,
+    on_rust_call: fn(a: i32, b: i32, c: &CStr) -> i32,
 }
 
 /// A native that triggers the OnRustCall forward and returns the result.
@@ -38,7 +38,7 @@ struct MyForwards {
 /// ```
 #[native]
 fn test_native_call(_ctx: &IPluginContext, a: i32, b: i32) -> Result<i32, sm_ext::SPError> {
-    let result = MyForwards::on_rust_call(|fwd| fwd.execute(a, b))?;
+    let result = MyForwards::on_rust_call(|fwd| fwd.execute(a, b, c_str!("Hello")))?;
 
     Ok(result)
 }
