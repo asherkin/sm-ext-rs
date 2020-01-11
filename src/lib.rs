@@ -223,7 +223,7 @@ pub trait IExtensionMetadata {
 #[repr(C)]
 pub struct IExtensionInterfaceAdapter<T: IExtensionInterface + IExtensionMetadata> {
     vtable: *mut IExtensionInterfaceVtable,
-    delegate: T,
+    pub delegate: T,
 }
 
 impl<T: IExtensionInterface + IExtensionMetadata> Drop for IExtensionInterfaceAdapter<T> {
@@ -686,8 +686,8 @@ pub struct IPluginContextVtable {
     _Execute: fn(),
     _ThrowNativeErrorEx: fn(),
     pub ThrowNativeError: fn(*const c_char, ...) -> cell_t,
-    _GetFunctionByName: fn(),
-    _GetFunctionById: fn(),
+    pub GetFunctionByName: fn(public_name: *const c_char) -> IPluginFunctionPtr,
+    pub GetFunctionById: fn(func_id: u32) -> IPluginFunctionPtr,
     pub GetIdentity: fn() -> IdentityTokenPtr,
     _GetNullRef: fn(),
     _LocalToStringNULL: fn(),
@@ -713,6 +713,19 @@ pub struct IPluginContextVtable {
 
 #[derive(Debug)]
 pub struct IPluginContext(pub IPluginContextPtr);
+
+#[derive(Debug)]
+pub enum GetFunctionError {
+    UnknownFunction,
+}
+
+impl std::fmt::Display for GetFunctionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for GetFunctionError {}
 
 impl IPluginContext {
     pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, SPError> {
@@ -745,8 +758,70 @@ impl IPluginContext {
         unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
     }
 
+    pub fn get_function_by_id(&self, func_id: u32) -> Result<IPluginFunction, GetFunctionError> {
+        unsafe {
+            let function = virtual_call!(GetFunctionById, self.0, func_id);
+            if function.is_null() {
+                Err(GetFunctionError::UnknownFunction)
+            } else {
+                Ok(IPluginFunction(function))
+            }
+        }
+    }
+
     pub fn get_identity(&self) -> IdentityTokenPtr {
         unsafe { virtual_call!(GetIdentity, self.0) }
+    }
+}
+
+pub type IPluginFunctionPtr = *mut *mut IPluginFunctionVtable;
+
+#[vtable(IPluginFunctionPtr)]
+pub struct IPluginFunctionVtable {
+    // ICallable
+    pub PushCell: fn(cell: cell_t) -> SPError,
+    pub PushCellByRef: fn(cell: *mut cell_t, flags: c_int) -> SPError,
+    pub PushFloat: fn(number: f32) -> SPError,
+    pub PushFloatByRef: fn(number: *mut f32, flags: c_int) -> SPError,
+    pub PushArray: fn(cell: *mut cell_t, cells: c_uint, flags: c_int) -> SPError,
+    pub PushString: fn(string: *const c_char) -> SPError,
+    pub PushStringEx: fn(string: *const c_char, length: size_t, sz_flags: c_int, cp_flags: c_int) -> SPError,
+    pub Cancel: fn(),
+
+    // IPluginFunction
+    pub Execute: fn(result: *mut cell_t) -> SPError,
+    _CallFunction: fn(),
+    _GetParentContext: fn(),
+    pub IsRunnable: fn() -> bool,
+    pub GetFunctionID: fn() -> u32,
+    _Execute2: fn(),
+    _CallFunction2: fn(),
+    _GetParentRuntime: fn(),
+    pub Invoke: fn(rval: *mut cell_t) -> bool,
+    pub DebugName: fn() -> *const c_char,
+}
+
+#[derive(Debug, ICallableApi)]
+pub struct IPluginFunction(pub IPluginFunctionPtr);
+
+impl ExecutableApi for IPluginFunction {
+    fn execute(&self) -> Result<cell_t, SPError> {
+        unsafe {
+            let mut result: cell_t = 0.into();
+            let res = virtual_call!(Execute, self.0, &mut result);
+            match res {
+                SPError::None => Ok(result),
+                _ => Err(res),
+            }
+        }
+    }
+}
+
+impl<'a> TryFromPlugin<'a> for IPluginFunction {
+    type Error = GetFunctionError;
+
+    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+        ctx.get_function_by_id(value.0 as u32)
     }
 }
 
@@ -810,6 +885,43 @@ pub struct IForwardVtable {
     pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> SPError,
 }
 
+pub type IChangeableForwardPtr = *mut *mut IChangeableForwardVtable;
+
+#[vtable(IChangeableForwardPtr)]
+pub struct IChangeableForwardVtable {
+    // ICallable
+    pub PushCell: fn(cell: cell_t) -> SPError,
+    pub PushCellByRef: fn(cell: *mut cell_t, flags: c_int) -> SPError,
+    pub PushFloat: fn(number: f32) -> SPError,
+    pub PushFloatByRef: fn(number: *mut f32, flags: c_int) -> SPError,
+    pub PushArray: fn(cell: *mut cell_t, cells: c_uint, flags: c_int) -> SPError,
+    pub PushString: fn(string: *const c_char) -> SPError,
+    pub PushStringEx: fn(string: *const c_char, length: size_t, sz_flags: c_int, cp_flags: c_int) -> SPError,
+    pub Cancel: fn(),
+
+    // IForward
+    _Destructor: fn() -> (),
+    #[cfg(not(windows))]
+    _Destructor2: fn() -> (),
+    pub GetForwardName: fn() -> *const c_char,
+    pub GetFunctionCount: fn() -> c_uint,
+    pub GetExecType: fn() -> ExecType,
+    pub Execute: fn(result: *mut cell_t, filter: *mut c_void) -> SPError,
+
+    // IChangeableForward
+    #[cfg(windows)]
+    pub RemoveFunctionById: fn(ctx: IPluginContextPtr, func: u32) -> bool,
+    pub RemoveFunction: fn(func: IPluginFunctionPtr) -> bool,
+    _RemoveFunctionsOfPlugin: fn(),
+    #[cfg(windows)]
+    pub AddFunctionById: fn(ctx: IPluginContextPtr, func: u32) -> bool,
+    pub AddFunction: fn(func: IPluginFunctionPtr) -> bool,
+    #[cfg(not(windows))]
+    pub AddFunctionById: fn(ctx: IPluginContextPtr, func: u32) -> bool,
+    #[cfg(not(windows))]
+    pub RemoveFunctionById: fn(ctx: IPluginContextPtr, func: u32) -> bool,
+}
+
 pub trait CallableParam {
     fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError>;
     fn param_type() -> ParamType;
@@ -865,7 +977,7 @@ pub struct IForward(pub IForwardPtr, IForwardManagerPtr);
 
 impl Drop for IForward {
     fn drop(&mut self) {
-        IForwardManager(self.1).release_forward(self);
+        IForwardManager(self.1).release_forward(&mut self.0);
     }
 }
 
@@ -882,8 +994,51 @@ impl ExecutableApi for IForward {
     }
 }
 
-// TODO: Type alias until it is properly implemented
-pub type IChangeableForwardPtr = IForwardPtr;
+impl IForward {
+    pub fn get_function_count(&self) -> u32 {
+        unsafe { virtual_call!(GetFunctionCount, self.0) }
+    }
+}
+
+#[derive(Debug, ICallableApi)]
+pub struct IChangeableForward(pub IChangeableForwardPtr, IForwardManagerPtr);
+
+impl Drop for IChangeableForward {
+    fn drop(&mut self) {
+        IForwardManager(self.1).release_forward(&mut (self.0 as IForwardPtr));
+    }
+}
+
+impl ExecutableApi for IChangeableForward {
+    fn execute(&self) -> Result<cell_t, SPError> {
+        unsafe {
+            let mut result: cell_t = 0.into();
+            let res = virtual_call!(Execute, self.0, &mut result, null_mut());
+            match res {
+                SPError::None => Ok(result),
+                _ => Err(res),
+            }
+        }
+    }
+}
+
+impl IChangeableForward {
+    pub fn get_function_count(&self) -> u32 {
+        unsafe { virtual_call!(GetFunctionCount, self.0) }
+    }
+
+    pub fn add_function(&self, func: &IPluginFunction) {
+        unsafe {
+            virtual_call!(AddFunction, self.0, func.0);
+        }
+    }
+
+    pub fn remove_function(&self, func: &IPluginFunction) {
+        unsafe {
+            virtual_call!(RemoveFunction, self.0, func.0);
+        }
+    }
+}
 
 pub type IForwardManagerPtr = *mut *mut IForwardManagerVtable;
 
@@ -907,12 +1062,20 @@ pub enum CreateForwardError {
     InvalidParams,
 }
 
+impl std::fmt::Display for CreateForwardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for CreateForwardError {}
+
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IForwardManager", 4)]
 pub struct IForwardManager(pub IForwardManagerPtr);
 
 impl IForwardManager {
-    pub fn create_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
+    pub fn create_global_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
         let c_name = CString::new(name).map_err(CreateForwardError::InvalidName)?;
 
         unsafe {
@@ -926,10 +1089,36 @@ impl IForwardManager {
         }
     }
 
-    pub fn release_forward(&self, forward: &mut IForward) {
+    pub fn create_private_forward(&self, name: Option<&str>, et: ExecType, params: &[ParamType]) -> Result<IChangeableForward, CreateForwardError> {
+        let c_name = match name {
+            Some(name) => Some(CString::new(name).map_err(CreateForwardError::InvalidName)?),
+            None => None,
+        };
+
+        let c_name = match c_name {
+            Some(c_name) => c_name.as_ptr(),
+            None => null(),
+        };
+
         unsafe {
-            virtual_call!(ReleaseForward, self.0, forward.0);
-            forward.0 = null_mut();
+            let forward = virtual_call_varargs!(CreateForwardEx, self.0, c_name, et, params.len() as u32, params.as_ptr());
+
+            if forward.is_null() {
+                Err(CreateForwardError::InvalidParams)
+            } else {
+                Ok(IChangeableForward(forward, self.0))
+            }
+        }
+    }
+
+    fn release_forward(&self, forward: &mut IForwardPtr) {
+        if forward.is_null() {
+            panic!("release_forward called on null forward ptr")
+        }
+
+        unsafe {
+            virtual_call!(ReleaseForward, self.0, *forward);
+            *forward = null_mut();
         }
     }
 }
@@ -1331,7 +1520,7 @@ pub fn safe_native_invoke<F: FnOnce() -> Result<cell_t, Box<dyn std::error::Erro
         },
         Err(err) => {
             let msg = format!(
-                "Unexpected panic: {}",
+                "Native panicked: {}",
                 if let Some(str_slice) = err.downcast_ref::<&'static str>() {
                     str_slice
                 } else if let Some(string) = err.downcast_ref::<String>() {

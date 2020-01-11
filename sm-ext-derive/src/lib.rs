@@ -41,12 +41,43 @@ pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::
         #[cfg(all(windows, not(target_feature = "crt-static"), not(test)))]
         compile_error!("SourceMod requires the Windows CRT to be statically linked (pass `-C target-feature=+crt-static` to rustc)");
 
+        thread_local! {
+            // TODO: This should probably be on the chopping block, it is fairly gross and not just because
+            // it is storing a raw pointer, but I can't currently think of a better way for consumers to
+            // be able to share the SM interfaces with natives.
+            //
+            // One more long-term option might be to handle this internally to the library and pass the
+            // singleton into native callbacks as a param - if we go that route I think this and the
+            // IPluginContext arguments need to be opt-in, possibly using attributes, so that all native
+            // callbacks don't end up with 2 params that 90% of them don't use.
+            //
+            // Even then this isn't a great solution for the interfaces, maybe we should store those in
+            // thread_local variables directly as part of the wrapping API (similar to how SM stores
+            // the requested interfaces in globals) and offer static methods to fetch them automatically.
+            // To do that we would only need to store IShareSys and IExtension globally, but should
+            // probably cache all requested interfaces individually (and ideally force checking them
+            // on load, but that is likely unrealistic.)
+            static EXTENSION_GLOBAL: std::cell::RefCell<Option<*mut sm_ext::IExtensionInterfaceAdapter<#name>>> = std::cell::RefCell::new(None);
+        }
+
         #[no_mangle]
         pub extern "C" fn GetSMExtAPI() -> *mut sm_ext::IExtensionInterfaceAdapter<#name> {
             let delegate: #name = Default::default();
             let extension = sm_ext::IExtensionInterfaceAdapter::new(delegate);
-            Box::into_raw(Box::new(extension))
+            let ptr = Box::into_raw(Box::new(extension));
+            EXTENSION_GLOBAL.with(|ext| {
+                *ext.borrow_mut() = Some(ptr);
+                ptr
+            })
         }
+
+        // impl #name {
+        //     fn get() -> &'static Self {
+        //         EXTENSION_GLOBAL.with(|ext| {
+        //             unsafe { &(*ext.borrow().unwrap()).delegate }
+        //         })
+        //     }
+        // }
 
         impl sm_ext::IExtensionMetadata for #name {
             fn get_extension_name(&self) -> &'static ::std::ffi::CStr {
@@ -694,7 +725,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         ));
 
         output_trait_impl_register.extend(quote_spanned!(forward.ident.span() =>
-            let #forward_ident = forward_manager.create_forward(#forward_name, #forward_exec_type, &[#forward_param_types])?;
+            let #forward_ident = forward_manager.create_global_forward(#forward_name, #forward_exec_type, &[#forward_param_types])?;
             #global_ident.with(|fwd| {
                 *fwd.borrow_mut() = Some(#forward_ident);
             });

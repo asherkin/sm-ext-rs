@@ -20,7 +20,7 @@
 //! ```
 
 use sm_ext::{c_str, forwards, native, register_natives, ExecType, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
-use std::ffi::{CString, CStr};
+use std::ffi::{CStr, CString};
 
 #[forwards]
 struct MyForwards {
