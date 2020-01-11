@@ -1,6 +1,6 @@
 [package]
 name = "sm-ext"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Asher Baker <asherkin@limetech.io>"]
 edition = "2018"
 description = "Helpers for writing SourceMod Extensions in Rust"
@@ -19,7 +19,7 @@ libc = "0.2.66"
 c_str_macro = "1.0.2"
 
 [dependencies.sm-ext-derive]
-version = "0.1.0"
+version = "0.2.0"
 path = "sm-ext-derive"
 
 [workspace]
