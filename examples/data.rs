@@ -20,12 +20,14 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, cell_t, native, register_natives, ExecType, ExecutableApi, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IPluginFunction, IShareSys, ParamType, SMExtension, SMInterfaceApi};
+use sm_ext::{c_str, cell_t, native, register_natives, ExecType, ExecutableApi, GameFrameHookId, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IPluginFunction, IShareSys, ISourceMod, ParamType, SMExtension, SMInterfaceApi};
 use std::error::Error;
 use std::ffi::CString;
 
 #[native]
-fn test_native(_ctx: &IPluginContext, func: IPluginFunction) -> Result<cell_t, Box<dyn Error>> {
+fn test_native(ctx: &IPluginContext, func: IPluginFunction) -> Result<cell_t, Box<dyn Error>> {
+    MyExtension::log_message(format!("Log message from Rust native! {:?} {:?}", ctx, func));
+
     println!(">>> test_native, func = {:?}", func);
 
     func.push(0)?;
@@ -50,12 +52,27 @@ fn test_native(_ctx: &IPluginContext, func: IPluginFunction) -> Result<cell_t, B
     Ok(result)
 }
 
+// Just used to avoid spamming stdout.
+static mut UNSAFE_COUNTER: i32 = 0;
+
+unsafe extern "C" fn on_game_frame(_simulating: bool) {
+    if UNSAFE_COUNTER > 5 {
+        return;
+    }
+
+    println!(">>> on_game_frame fired!");
+
+    UNSAFE_COUNTER += 1;
+}
+
 #[derive(Default, SMExtension)]
 #[extension(name = "Rusty", description = "Sample extension written in Rust")]
 pub struct MyExtension {
     myself: Option<IExtension>,
     sharesys: Option<IShareSys>,
     forwardsys: Option<IForwardManager>,
+    sourcemod: Option<ISourceMod>,
+    frame_hook: Option<GameFrameHookId>,
 }
 
 impl MyExtension {
@@ -63,6 +80,10 @@ impl MyExtension {
     /// This is implemented here rather than by the SMExtension derive to aid code completion.
     fn get() -> &'static Self {
         EXTENSION_GLOBAL.with(|ext| unsafe { &(*ext.borrow().unwrap()).delegate })
+    }
+
+    fn log_message(msg: String) {
+        Self::get().sourcemod.as_ref().unwrap().log_message(Self::get().myself.as_ref().unwrap(), msg);
     }
 }
 
@@ -72,6 +93,15 @@ impl IExtensionInterface for MyExtension {
 
         let forward_manager: IForwardManager = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IForwardManager interface"))?;
         println!(">>> Got interface: {:?} v{:?}", forward_manager.get_interface_name(), forward_manager.get_interface_version());
+
+        let sourcemod: ISourceMod = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get ISourceMod interface"))?;
+        println!(">>> Got interface: {:?} v{:?}", sourcemod.get_interface_name(), sourcemod.get_interface_version());
+
+        sourcemod.add_frame_action(|| {
+            println!(">>> add_frame_action callback fired!");
+        });
+
+        self.frame_hook = Some(sourcemod.add_game_frame_hook(on_game_frame));
 
         register_natives!(
             &sys,
@@ -84,7 +114,12 @@ impl IExtensionInterface for MyExtension {
         self.myself = Some(myself);
         self.sharesys = Some(sys);
         self.forwardsys = Some(forward_manager);
+        self.sourcemod = Some(sourcemod);
 
         Ok(())
+    }
+
+    fn on_extension_unload(&mut self) {
+        self.frame_hook = None;
     }
 }

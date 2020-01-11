@@ -250,6 +250,7 @@ impl MetadataInput {
             None => MetadataString::EnvVar("CARGO_PKG_VERSION".into()),
         };
 
+        // TODO: This probably should have a special type to slugify/uppercase the package name later.
         let tag = match tag {
             Some(tag) => MetadataString::String(tag),
             None => MetadataString::EnvVar("CARGO_PKG_NAME".into()),
