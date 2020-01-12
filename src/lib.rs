@@ -392,7 +392,7 @@ pub enum IsRunningError<'a> {
 }
 
 #[derive(Debug)]
-pub struct IExtension(pub IExtensionPtr);
+pub struct IExtension(IExtensionPtr);
 
 impl IExtension {
     pub fn is_loaded(&self) -> bool {
@@ -462,7 +462,7 @@ pub trait SMInterfaceApi {
 }
 
 #[derive(Debug, SMInterfaceApi)]
-pub struct SMInterface(pub SMInterfacePtr);
+pub struct SMInterface(SMInterfacePtr);
 
 pub type IFeatureProviderPtr = *mut *mut IFeatureProviderVtable;
 
@@ -501,7 +501,7 @@ pub enum RequestInterfaceError {
 }
 
 #[derive(Debug)]
-pub struct IShareSys(pub IShareSysPtr);
+pub struct IShareSys(IShareSysPtr);
 
 impl IShareSys {
     pub fn request_interface<I: RequestableInterface>(&self, myself: &IExtension) -> Result<I, RequestInterfaceError> {
@@ -712,7 +712,7 @@ pub struct IPluginContextVtable {
 }
 
 #[derive(Debug)]
-pub struct IPluginContext(pub IPluginContextPtr);
+pub struct IPluginContext(IPluginContextPtr);
 
 #[derive(Debug)]
 pub enum GetFunctionError {
@@ -802,7 +802,7 @@ pub struct IPluginFunctionVtable {
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IPluginFunction(pub IPluginFunctionPtr);
+pub struct IPluginFunction(IPluginFunctionPtr);
 
 impl ExecutableApi for IPluginFunction {
     fn execute(&self) -> Result<cell_t, SPError> {
@@ -927,6 +927,16 @@ pub trait CallableParam {
     fn param_type() -> ParamType;
 }
 
+impl CallableParam for cell_t {
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+        callable.push_int(self.0)
+    }
+
+    fn param_type() -> ParamType {
+        ParamType::Cell
+    }
+}
+
 impl CallableParam for i32 {
     fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
         callable.push_int(*self)
@@ -973,7 +983,7 @@ pub trait ExecutableApi: ICallableApi + Sized {
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IForward(pub IForwardPtr, IForwardManagerPtr);
+pub struct IForward(IForwardPtr, IForwardManagerPtr);
 
 impl Drop for IForward {
     fn drop(&mut self) {
@@ -1001,7 +1011,7 @@ impl IForward {
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IChangeableForward(pub IChangeableForwardPtr, IForwardManagerPtr);
+pub struct IChangeableForward(IChangeableForwardPtr, IForwardManagerPtr);
 
 impl Drop for IChangeableForward {
     fn drop(&mut self) {
@@ -1072,7 +1082,7 @@ impl std::error::Error for CreateForwardError {}
 
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IForwardManager", 4)]
-pub struct IForwardManager(pub IForwardManagerPtr);
+pub struct IForwardManager(IForwardManagerPtr);
 
 impl IForwardManager {
     pub fn create_global_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
@@ -1124,12 +1134,32 @@ impl IForwardManager {
 }
 
 #[repr(transparent)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HandleTypeId(c_uint);
 
+impl HandleTypeId {
+    pub fn is_valid(self) -> bool {
+        self.0 != 0
+    }
+
+    pub fn invalid() -> Self {
+        Self(0)
+    }
+}
+
 #[repr(transparent)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct HandleId(c_uint);
+
+impl HandleId {
+    pub fn is_valid(&self) -> bool {
+        self.0 != 0
+    }
+
+    pub fn invalid() -> Self {
+        Self(0)
+    }
+}
 
 impl From<cell_t> for HandleId {
     fn from(x: cell_t) -> Self {
@@ -1140,6 +1170,16 @@ impl From<cell_t> for HandleId {
 impl From<HandleId> for cell_t {
     fn from(x: HandleId) -> Self {
         Self(x.0 as i32)
+    }
+}
+
+impl CallableParam for HandleId {
+    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+        callable.push_int(self.0 as i32)
+    }
+
+    fn param_type() -> ParamType {
+        ParamType::Cell
     }
 }
 
@@ -1323,7 +1363,7 @@ impl<T> HandleType<T> {
 
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IHandleSys", 5)]
-pub struct IHandleSys(pub IHandleSysPtr);
+pub struct IHandleSys(IHandleSysPtr);
 
 impl IHandleSys {
     pub fn create_type<T>(&self, name: &str, ident: IdentityTokenPtr) -> Result<HandleType<T>, HandleError> {
@@ -1331,19 +1371,18 @@ impl IHandleSys {
             let c_name = CString::new(name).unwrap(); // TODO
             let dispatch = Box::into_raw(Box::new(IHandleTypeDispatchAdapter::<T>::new()));
             let mut err: HandleError = HandleError::None;
-            let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId(0), null(), null(), ident, &mut err);
-            // TODO: Add constants for null IDs
-            if id.0 == 0 {
-                Err(err)
-            } else {
+            let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId::invalid(), null(), null(), ident, &mut err);
+            if id.is_valid() {
                 Ok(HandleType { iface: self.0, id, dispatch, ident })
+            } else {
+                Err(err)
             }
         }
     }
 
     fn remove_type<T>(&self, ty: &mut HandleType<T>) -> Result<(), bool> {
         unsafe {
-            if virtual_call!(RemoveType, self.0, HandleTypeId(ty.id.0), ty.ident) {
+            if virtual_call!(RemoveType, self.0, ty.id, ty.ident) {
                 Ok(())
             } else {
                 Err(false)
@@ -1356,12 +1395,11 @@ impl IHandleSys {
             let object = Box::into_raw(Box::new(object)) as *mut c_void;
             let security = HandleSecurity::new(owner, ty.ident);
             let mut err: HandleError = HandleError::None;
-            let id = virtual_call!(CreateHandleEx, self.0, HandleTypeId(ty.id.0), object, &security, null(), &mut err);
-            // TODO: Add constants for null IDs
-            if id.0 == 0 {
-                Err(err)
-            } else {
+            let id = virtual_call!(CreateHandleEx, self.0, ty.id, object, &security, null(), &mut err);
+            if id.is_valid() {
                 Ok(id)
+            } else {
+                Err(err)
             }
         }
     }
@@ -1370,7 +1408,7 @@ impl IHandleSys {
         unsafe {
             let security = HandleSecurity::new(owner, ty.ident);
             let mut object: *mut c_void = null_mut();
-            let err = virtual_call!(ReadHandle, self.0, handle, HandleTypeId(ty.id.0), &security, &mut object);
+            let err = virtual_call!(ReadHandle, self.0, handle, ty.id, &security, &mut object);
             match err {
                 HandleError::None => Ok(&mut *(object as *mut T)),
                 _ => Err(err),
@@ -1436,7 +1474,7 @@ pub struct ISourceModVtable {
 
 #[derive(Debug, SMInterfaceApi)]
 #[interface("ISourceMod", 14)]
-pub struct ISourceMod(pub ISourceModPtr);
+pub struct ISourceMod(ISourceModPtr);
 
 pub struct GameFrameHookId(GameFrameHookFunc, ISourceModPtr);
 
@@ -1625,8 +1663,12 @@ where
 /// return into a SourceMod error using [`IPluginContext::throw_native_error`].
 ///
 /// This is used internally by the `#[native]` attribute.
-pub fn safe_native_invoke<F: FnOnce() -> Result<cell_t, Box<dyn std::error::Error>> + std::panic::UnwindSafe>(ctx: &IPluginContext, f: F) -> cell_t {
-    let result = std::panic::catch_unwind(f);
+pub fn safe_native_invoke<F>(ctx: IPluginContextPtr, f: F) -> cell_t
+where
+    F: FnOnce(&IPluginContext) -> Result<cell_t, Box<dyn std::error::Error>> + std::panic::UnwindSafe,
+{
+    let ctx = IPluginContext(ctx);
+    let result = std::panic::catch_unwind(|| f(&ctx));
 
     match result {
         Ok(result) => match result {
