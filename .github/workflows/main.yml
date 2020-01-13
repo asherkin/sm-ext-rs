@@ -37,6 +37,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+        
+      - name: Install 32-bit Support
+        if: runner.os == 'Linux'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y g++-multilib
 
       - uses: actions-rs/toolchain@v1
         with:
