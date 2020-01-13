@@ -6,6 +6,7 @@ jobs:
   ci:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         name:
           - ubuntu-latest-stable
@@ -47,7 +48,8 @@ jobs:
 
       - uses: actions-rs/cargo@v1
         with:
-          command: build --locked --all --all-targets --target=${{ matrix.target }}
+          command: build
+          args: --locked --all --all-targets --target=${{ matrix.target }}
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
@@ -58,7 +60,7 @@ jobs:
 
       - uses: actions-rs/cargo@v1
         with:
-          command: clippy --locked --all --all-targets --target=${{ matrix.target }}
-          args: -- -D warnings
+          command: clippy
+          args: --locked --all --all-targets --target=${{ matrix.target }} -- -D warnings
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
