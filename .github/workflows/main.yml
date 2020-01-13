@@ -1,0 +1,64 @@
+name: Continuous Integration
+
+on: [push, pull_request]
+
+jobs:
+  ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        name:
+          - ubuntu-latest-stable
+          - ubuntu-latest-nightly
+          - windows-latest-stable
+          - windows-latest-nightly
+        include:
+          - name: ubuntu-latest-stable
+            os: ubuntu-latest
+            rust: stable
+            target: i686-unknown-linux-gnu
+            rustflags: -D warnings
+          - name: ubuntu-latest-nightly
+            os: ubuntu-latest
+            rust: nightly
+            target: i686-unknown-linux-gnu
+            rustflags: -D warnings
+          - name: windows-latest-stable
+            os: windows-latest
+            rust: stable
+            target: i686-pc-windows-msvc
+            rustflags: -D warnings -C target-feature=+crt-static
+          - name: windows-latest-nightly
+            os: windows-latest
+            rust: nightly
+            target: i686-pc-windows-msvc
+            rustflags: -D warnings -C target-feature=+crt-static
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+          override: true
+          components: rustfmt, clippy
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build --locked --all --all-targets --target=${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy --locked --all --all-targets --target=${{ matrix.target }}
+          args: -- -D warnings
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
