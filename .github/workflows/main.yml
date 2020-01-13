@@ -49,7 +49,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --locked --all --all-targets --target=${{ matrix.target }}
+          args: --all --all-targets --target=${{ matrix.target }}
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
@@ -61,6 +61,6 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --locked --all --all-targets --target=${{ matrix.target }} -- -D warnings
+          args: --all --all-targets --target=${{ matrix.target }} -- -D warnings
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
