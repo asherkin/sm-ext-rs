@@ -22,6 +22,10 @@ c_str_macro = "1.0.2"
 version = "0.2.0"
 path = "sm-ext-derive"
 
+[dev-dependencies]
+futures = "0.3"
+async-std = "1.4"
+
 [workspace]
 
 [[example]]
@@ -42,4 +46,8 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "data"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "async"
 crate-type = ["cdylib"]
