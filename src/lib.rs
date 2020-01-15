@@ -764,7 +764,7 @@ impl IPluginContext {
             if function.is_null() {
                 Err(GetFunctionError::UnknownFunction)
             } else {
-                Ok(IPluginFunction(function))
+                Ok(IPluginFunction(function, self))
             }
         }
     }
@@ -802,10 +802,10 @@ pub struct IPluginFunctionVtable {
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IPluginFunction(IPluginFunctionPtr);
+pub struct IPluginFunction<'ctx>(IPluginFunctionPtr, &'ctx IPluginContext);
 
-impl ExecutableApi for IPluginFunction {
-    fn execute(&self) -> Result<cell_t, SPError> {
+impl ExecutableApi for IPluginFunction<'_> {
+    fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
             let res = virtual_call!(Execute, self.0, &mut result);
@@ -817,7 +817,7 @@ impl ExecutableApi for IPluginFunction {
     }
 }
 
-impl<'a> TryFromPlugin<'a> for IPluginFunction {
+impl<'a> TryFromPlugin<'a> for IPluginFunction<'a> {
     type Error = GetFunctionError;
 
     fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -923,12 +923,12 @@ pub struct IChangeableForwardVtable {
 }
 
 pub trait CallableParam {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError>;
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError>;
     fn param_type() -> ParamType;
 }
 
 impl CallableParam for cell_t {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError> {
         callable.push_int(self.0)
     }
 
@@ -938,7 +938,7 @@ impl CallableParam for cell_t {
 }
 
 impl CallableParam for i32 {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError> {
         callable.push_int(*self)
     }
 
@@ -948,7 +948,7 @@ impl CallableParam for i32 {
 }
 
 impl CallableParam for f32 {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError> {
         callable.push_float(*self)
     }
 
@@ -958,7 +958,7 @@ impl CallableParam for f32 {
 }
 
 impl CallableParam for &CStr {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError> {
         callable.push_string(self)
     }
 
@@ -969,15 +969,15 @@ impl CallableParam for &CStr {
 
 // TODO: This interface is very, very rough.
 pub trait ICallableApi {
-    fn push_int(&self, cell: i32) -> Result<(), SPError>;
-    fn push_float(&self, number: f32) -> Result<(), SPError>;
-    fn push_string(&self, string: &CStr) -> Result<(), SPError>;
+    fn push_int(&mut self, cell: i32) -> Result<(), SPError>;
+    fn push_float(&mut self, number: f32) -> Result<(), SPError>;
+    fn push_string(&mut self, string: &CStr) -> Result<(), SPError>;
 }
 
 pub trait ExecutableApi: ICallableApi + Sized {
-    fn execute(&self) -> Result<cell_t, SPError>;
+    fn execute(&mut self) -> Result<cell_t, SPError>;
 
-    fn push<T: CallableParam>(&self, param: T) -> Result<(), SPError> {
+    fn push<T: CallableParam>(&mut self, param: T) -> Result<(), SPError> {
         param.push(self)
     }
 }
@@ -992,7 +992,7 @@ impl Drop for IForward {
 }
 
 impl ExecutableApi for IForward {
-    fn execute(&self) -> Result<cell_t, SPError> {
+    fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
             let res = virtual_call!(Execute, self.0, &mut result, null_mut());
@@ -1020,7 +1020,7 @@ impl Drop for IChangeableForward {
 }
 
 impl ExecutableApi for IChangeableForward {
-    fn execute(&self) -> Result<cell_t, SPError> {
+    fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
             let res = virtual_call!(Execute, self.0, &mut result, null_mut());
@@ -1037,13 +1037,13 @@ impl IChangeableForward {
         unsafe { virtual_call!(GetFunctionCount, self.0) }
     }
 
-    pub fn add_function(&self, func: &IPluginFunction) {
+    pub fn add_function(&mut self, func: &mut IPluginFunction) {
         unsafe {
             virtual_call!(AddFunction, self.0, func.0);
         }
     }
 
-    pub fn remove_function(&self, func: &IPluginFunction) {
+    pub fn remove_function(&mut self, func: &mut IPluginFunction) {
         unsafe {
             virtual_call!(RemoveFunction, self.0, func.0);
         }
@@ -1174,7 +1174,7 @@ impl From<HandleId> for cell_t {
 }
 
 impl CallableParam for HandleId {
-    fn push<T: ICallableApi>(&self, callable: &T) -> Result<(), SPError> {
+    fn push<T: ICallableApi>(&self, callable: &mut T) -> Result<(), SPError> {
         callable.push_int(self.0 as i32)
     }
 

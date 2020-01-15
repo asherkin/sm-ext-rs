@@ -355,10 +355,11 @@ pub fn derive_interface_api(input: proc_macro::TokenStream) -> proc_macro::Token
 pub fn derive_callable_api(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    let ident = input.ident;
+    let ident = &input.ident;
+    let generics = &input.generics;
     let output = quote! {
-        impl ICallableApi for #ident {
-            fn push_int(&self, cell: i32) -> Result<(), SPError> {
+        impl #generics ICallableApi for #ident #generics {
+            fn push_int(&mut self, cell: i32) -> Result<(), SPError> {
                 unsafe {
                     let res = virtual_call!(PushCell, self.0, cell.into());
                     match res {
@@ -368,7 +369,7 @@ pub fn derive_callable_api(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 }
             }
 
-            fn push_float(&self, number: f32) -> Result<(), SPError> {
+            fn push_float(&mut self, number: f32) -> Result<(), SPError> {
                 unsafe {
                     let res = virtual_call!(PushFloat, self.0, number);
                     match res {
@@ -378,7 +379,7 @@ pub fn derive_callable_api(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 }
             }
 
-            fn push_string(&self, string: &CStr) -> Result<(), SPError> {
+            fn push_string(&mut self, string: &CStr) -> Result<(), SPError> {
                 unsafe {
                     let res = virtual_call!(PushString, self.0, string.as_ptr());
                     match res {
@@ -696,7 +697,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
 
         output.extend(quote_spanned!(forward.ident.span() =>
             #[allow(non_camel_case_types)]
-            struct #type_ident<'a>(&'a sm_ext::IForward);
+            struct #type_ident<'a>(&'a mut sm_ext::IForward);
         ));
 
         let execute_return = match &forward_call_return {
@@ -706,7 +707,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
 
         output.extend(quote_spanned!(forward.ident.span() =>
             impl #type_ident<'_> {
-                fn execute(&self, #forward_call_args) -> Result<#forward_call_return, sm_ext::SPError> {
+                fn execute(&mut self, #forward_call_args) -> Result<#forward_call_return, sm_ext::SPError> {
                     use sm_ext::ExecutableApi;
                     #forward_call_pushes
                     #execute_return
@@ -720,7 +721,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         ));
 
         output_trait.extend(quote_spanned!(forward.ident.span() =>
-            fn #forward_ident<F, R>(f: F) -> R where F: FnOnce(&#type_ident) -> R;
+            fn #forward_ident<F, R>(f: F) -> R where F: FnOnce(&mut #type_ident) -> R;
         ));
 
         output_trait_impl_register.extend(quote_spanned!(forward.ident.span() =>
@@ -737,12 +738,12 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         ));
 
         output_trait_impl.extend(quote_spanned!(forward.ident.span() =>
-            fn #forward_ident<F, R>(f: F) -> R where F: FnOnce(&#type_ident) -> R {
+            fn #forward_ident<F, R>(f: F) -> R where F: FnOnce(&mut #type_ident) -> R {
                 #global_ident.with(|fwd| {
-                    let fwd = fwd.borrow();
-                    let fwd = fwd.as_ref().unwrap();
-                    let fwd = #type_ident(fwd);
-                    f(&fwd)
+                    let mut fwd = fwd.borrow_mut();
+                    let fwd = fwd.as_mut().unwrap();
+                    let mut fwd = #type_ident(fwd);
+                    f(&mut fwd)
                 })
             }
         ));

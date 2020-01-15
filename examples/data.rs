@@ -25,7 +25,7 @@ use std::error::Error;
 use std::ffi::CString;
 
 #[native]
-fn test_native(ctx: &IPluginContext, func: IPluginFunction) -> Result<cell_t, Box<dyn Error>> {
+fn test_native(ctx: &IPluginContext, mut func: IPluginFunction) -> Result<cell_t, Box<dyn Error>> {
     MyExtension::log_message(format!("Log message from Rust native! {:?} {:?}", ctx, func));
 
     println!(">>> test_native, func = {:?}", func);
@@ -37,10 +37,10 @@ fn test_native(ctx: &IPluginContext, func: IPluginFunction) -> Result<cell_t, Bo
     println!(">>> func() = {:?}", result);
 
     // Admittedly, this is a little gross.
-    let forward = MyExtension::get().forwardsys.as_ref().unwrap().create_private_forward(None, ExecType::Single, &[ParamType::Cell, ParamType::String, ParamType::Float])?;
+    let mut forward = MyExtension::get().forwardsys.as_ref().unwrap().create_private_forward(None, ExecType::Single, &[ParamType::Cell, ParamType::String, ParamType::Float])?;
     assert_eq!(forward.get_function_count(), 0);
 
-    forward.add_function(&func);
+    forward.add_function(&mut func);
     assert_eq!(forward.get_function_count(), 1);
 
     forward.push(0)?;
