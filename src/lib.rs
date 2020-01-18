@@ -12,6 +12,7 @@ pub use c_str_macro::c_str;
 pub use libc::size_t;
 
 pub use sm_ext_derive::{forwards, native, vtable, vtable_override, ICallableApi, SMExtension, SMInterfaceApi};
+use std::ops::{Deref, DerefMut};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
@@ -1148,11 +1149,11 @@ impl HandleTypeId {
 }
 
 #[repr(transparent)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HandleId(c_uint);
 
 impl HandleId {
-    pub fn is_valid(&self) -> bool {
+    pub fn is_valid(self) -> bool {
         self.0 != 0
     }
 
@@ -1351,12 +1352,93 @@ impl<T> Drop for HandleType<T> {
     }
 }
 
+pub trait AssociatedHandleType: Sized {
+    fn handle_type<'ty>() -> &'ty HandleType<Self>;
+
+    // TODO: Try and avoid having to read the ptr back from the handle.
+    fn into_handle<'ty>(self) -> Result<HandleRef<'ty, Self>, HandleError> {
+        let ty = Self::handle_type();
+        let handle = ty.create(self, ty.ident)?;
+        let ptr = ty.read(handle, ty.ident)?;
+
+        Ok(HandleRef { ty, handle, ptr })
+    }
+}
+
+impl<'ctx, 'ty, T: AssociatedHandleType> TryFromPlugin<'ctx> for HandleRef<'ty, T> {
+    type Error = HandleError;
+
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+        let ty = T::handle_type();
+        let handle = HandleId::from(value);
+        let owner = ctx.get_identity();
+
+        HandleRef::new(ty, handle, owner)
+    }
+}
+
+pub struct HandleRef<'ty, T> {
+    ty: &'ty HandleType<T>,
+    handle: HandleId,
+    ptr: *mut T,
+}
+
+impl<'ty, T> HandleRef<'ty, T> {
+    pub fn new(ty: &'ty HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<Self, HandleError> {
+        let ptr = ty.read(handle, owner)?;
+        let owned = ty.clone(handle, owner, ty.ident)?;
+
+        Ok(HandleRef { ty, handle: owned, ptr })
+    }
+
+    pub fn clone(&self, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        self.ty.clone(self.handle, self.ty.ident, new_owner)
+    }
+}
+
+impl<'ty, T> Drop for HandleRef<'ty, T> {
+    fn drop(&mut self) {
+        match self.ty.free(self.handle, self.ty.ident) {
+            Ok(_) => self.handle = HandleId::invalid(),
+            Err(e) => panic!("Invalid handle when dropping HandleRef: {}", e),
+        }
+    }
+}
+
+impl<'ty, T> Deref for HandleRef<'ty, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.ptr }
+    }
+}
+
+impl<'ty, T> DerefMut for HandleRef<'ty, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.ptr }
+    }
+}
+
+impl<'ty, T> std::fmt::Debug for HandleRef<'ty, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "HandleRef({:08x}, {:?})", self.handle.0, self.ptr)
+    }
+}
+
 impl<T> HandleType<T> {
     pub fn create(&self, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
         IHandleSys(self.iface).create_handle(self, object, owner)
     }
 
-    pub fn read<'a>(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
+    pub fn clone(&self, handle: HandleId, owner: IdentityTokenPtr, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        IHandleSys(self.iface).clone_handle(self, handle, owner, new_owner)
+    }
+
+    pub fn free(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<(), HandleError> {
+        IHandleSys(self.iface).free_handle(self, handle, owner)
+    }
+
+    pub fn read(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
         IHandleSys(self.iface).read_handle(self, handle, owner)
     }
 }
@@ -1404,13 +1486,36 @@ impl IHandleSys {
         }
     }
 
-    fn read_handle<'a, T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<&'a mut T, HandleError> {
+    fn free_handle<T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<(), HandleError> {
+        unsafe {
+            let security = HandleSecurity::new(owner, ty.ident);
+            let err = virtual_call!(FreeHandle, self.0, handle, &security);
+            match err {
+                HandleError::None => Ok(()),
+                _ => Err(err),
+            }
+        }
+    }
+
+    fn clone_handle<T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        unsafe {
+            let security = HandleSecurity::new(owner, ty.ident);
+            let mut new_handle = HandleId::invalid();
+            let err = virtual_call!(CloneHandle, self.0, handle, &mut new_handle, new_owner, &security);
+            match err {
+                HandleError::None => Ok(new_handle),
+                _ => Err(err),
+            }
+        }
+    }
+
+    fn read_handle<T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
         unsafe {
             let security = HandleSecurity::new(owner, ty.ident);
             let mut object: *mut c_void = null_mut();
             let err = virtual_call!(ReadHandle, self.0, handle, ty.id, &security, &mut object);
             match err {
-                HandleError::None => Ok(&mut *(object as *mut T)),
+                HandleError::None => Ok(object as *mut T),
                 _ => Err(err),
             }
         }

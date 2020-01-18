@@ -20,39 +20,25 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, cell_t, native, register_natives, HandleError, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryFromPlugin, TryIntoPlugin};
-use std::cell::RefCell;
+use sm_ext::{c_str, cell_t, native, register_natives, AssociatedHandleType, HandleError, HandleRef, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
 use std::ffi::CString;
 
 #[derive(Debug)]
 struct RustContext(i32);
 
-thread_local! {
-    static HANDLE_TYPE: RefCell<Option<HandleType<RustContext>>> = RefCell::new(None);
-}
-
-impl<'a> TryFromPlugin<'a> for &'a mut RustContext {
-    type Error = HandleError;
-
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-        HANDLE_TYPE.with(|ty| -> Result<&'a mut RustContext, HandleError> {
-            let ty = ty.borrow();
-            let ty = ty.as_ref().unwrap();
-            ty.read(value.into(), ctx.get_identity())
-        })
+impl AssociatedHandleType for RustContext {
+    fn handle_type<'ty>() -> &'ty HandleType<Self> {
+        MyExtension::handle_type()
     }
 }
 
-impl<'a> TryIntoPlugin<'a> for RustContext {
+impl<'ctx> TryIntoPlugin<'ctx> for RustContext {
     type Error = HandleError;
 
-    fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<cell_t, Self::Error> {
-        HANDLE_TYPE.with(|ty| {
-            let ty = ty.borrow();
-            let ty = ty.as_ref().unwrap();
-            let handle = ty.create(self, ctx.get_identity())?;
-            Ok(handle.into())
-        })
+    fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<cell_t, Self::Error> {
+        let handle = MyExtension::handle_type().create(self, ctx.get_identity())?;
+
+        Ok(handle.into())
     }
 }
 
@@ -64,14 +50,14 @@ fn native_obj_new(_ctx: &IPluginContext) -> RustContext {
 }
 
 #[native]
-fn native_obj_add(_ctx: &IPluginContext, this: &mut RustContext, number: i32) {
+fn native_obj_add(_ctx: &IPluginContext, mut this: HandleRef<RustContext>, number: i32) {
     println!(">>> Rust.Add({:?}, {:?})", this, number);
 
     this.0 += number;
 }
 
 #[native]
-fn native_obj_result(_ctx: &IPluginContext, this: &mut RustContext) -> i32 {
+fn native_obj_result(_ctx: &IPluginContext, this: HandleRef<RustContext>) -> i32 {
     println!(">>> Rust.Result({:?})", this);
 
     this.0
@@ -79,7 +65,21 @@ fn native_obj_result(_ctx: &IPluginContext, this: &mut RustContext) -> i32 {
 
 #[derive(Default, SMExtension)]
 #[extension(name = "Rusty", description = "Sample extension written in Rust")]
-pub struct MyExtension;
+pub struct MyExtension {
+    handle_type: Option<HandleType<RustContext>>,
+}
+
+impl MyExtension {
+    /// Helper to get the extension singleton from the global provided by sm-ext.
+    /// This is implemented here rather than by the SMExtension derive to aid code completion.
+    fn get() -> &'static Self {
+        EXTENSION_GLOBAL.with(|ext| unsafe { &(*ext.borrow().unwrap()).delegate })
+    }
+
+    fn handle_type() -> &'static HandleType<RustContext> {
+        Self::get().handle_type.as_ref().unwrap()
+    }
+}
 
 impl IExtensionInterface for MyExtension {
     fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
@@ -89,9 +89,7 @@ impl IExtensionInterface for MyExtension {
         println!(">>> Got interface: {:?} v{:?}", handlesys.get_interface_name(), handlesys.get_interface_version());
 
         let handle_type: HandleType<RustContext> = handlesys.create_type("RustContext", myself.get_identity()).map_err(|_| c_str!("Failed to create RustContext Handle type"))?;
-        HANDLE_TYPE.with(|ty| {
-            *ty.borrow_mut() = Some(handle_type);
-        });
+        self.handle_type = Some(handle_type);
 
         register_natives!(
             &sys,
@@ -107,8 +105,6 @@ impl IExtensionInterface for MyExtension {
     }
 
     fn on_extension_unload(&mut self) {
-        HANDLE_TYPE.with(|ty| {
-            *ty.borrow_mut() = None;
-        });
+        self.handle_type = None;
     }
 }
