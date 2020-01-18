@@ -20,7 +20,7 @@
 //! ```
 
 use sm_ext::{c_str, forwards, native, register_natives, ExecType, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IShareSys, SMExtension, SMInterfaceApi};
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 #[forwards]
 struct MyForwards {
@@ -48,13 +48,13 @@ fn test_native_call(_ctx: &IPluginContext, a: i32, b: i32) -> Result<i32, sm_ext
 pub struct MyExtension;
 
 impl IExtensionInterface for MyExtension {
-    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!(">>> Rusty extension loaded! me = {:?}, sys = {:?}, late = {:?}", myself, sys, late);
 
-        let forward_manager: IForwardManager = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IForwardManager interface"))?;
+        let forward_manager: IForwardManager = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", forward_manager.get_interface_name(), forward_manager.get_interface_version());
 
-        MyForwards::register(&forward_manager).map_err(|err| CString::new(format!("Failed to register forwards: {:?}", err)).unwrap())?;
+        MyForwards::register(&forward_manager)?;
 
         register_natives!(
             &sys,

@@ -10,7 +10,7 @@
 //! ```
 
 use sm_ext::{native, register_natives, IExtension, IExtensionInterface, IPluginContext, IShareSys, SMExtension};
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 /// A native that adds two integers.
 ///
@@ -67,7 +67,7 @@ fn test_native(ctx: &IPluginContext, a: i32, b: f32, c: &CStr, d: &mut i32, e: &
 pub struct MyExtension;
 
 impl IExtensionInterface for MyExtension {
-    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!(">>> Rusty extension loaded! me = {:?}, sys = {:?}, late = {:?}", myself, sys, late);
 
         register_natives!(

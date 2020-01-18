@@ -3,7 +3,9 @@
 //! This interface is extremely unstable, everything just lives in a soup at the top level for now.
 
 use std::convert::TryFrom;
+use std::error::Error;
 use std::ffi::{CStr, CString, NulError};
+use std::ops::{Deref, DerefMut};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::{null, null_mut};
 use std::str::Utf8Error;
@@ -12,7 +14,6 @@ pub use c_str_macro::c_str;
 pub use libc::size_t;
 
 pub use sm_ext_derive::{forwards, native, vtable, vtable_override, ICallableApi, SMExtension, SMInterfaceApi};
-use std::ops::{Deref, DerefMut};
 
 #[repr(transparent)]
 pub struct IdentityType(c_uint);
@@ -116,7 +117,7 @@ impl<'ctx> TryFromPlugin<'ctx> for &'ctx CStr {
 }
 
 impl<'ctx> TryFromPlugin<'ctx> for &'ctx str {
-    type Error = Box<dyn std::error::Error>;
+    type Error = Box<dyn Error>;
 
     fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         Ok(ctx.local_to_string(value)?.to_str()?)
@@ -195,7 +196,7 @@ pub struct IExtensionInterfaceVtable {
 // There appears to be a bug with the MSVC linker in release mode dropping these symbols when threaded
 // compilation is enabled - if you run into undefined symbol errors here try setting code-units to 1.
 pub trait IExtensionInterface {
-    fn on_extension_load(&mut self, me: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, me: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
     fn on_extension_unload(&mut self) {}
@@ -237,7 +238,6 @@ impl<T: IExtensionInterface + ExtensionMetadata> Drop for IExtensionInterfaceAda
     }
 }
 
-// TODO: The implementations in here need to catch panics in the delegate functions.
 impl<T: IExtensionInterface + ExtensionMetadata> IExtensionInterfaceAdapter<T> {
     pub fn new(delegate: T) -> IExtensionInterfaceAdapter<T> {
         let vtable = IExtensionInterfaceVtable {
@@ -272,10 +272,31 @@ impl<T: IExtensionInterface + ExtensionMetadata> IExtensionInterfaceAdapter<T> {
 
     #[vtable_override]
     unsafe fn on_extension_load(this: IExtensionInterfacePtr, me: IExtensionPtr, sys: IShareSysPtr, error: *mut c_char, maxlength: size_t, late: bool) -> bool {
-        match (*this.cast::<Self>()).delegate.on_extension_load(IExtension(me), IShareSys(sys), late) {
-            Ok(_) => true,
-            Err(str) => {
-                libc::strncpy(error, str.as_ptr(), maxlength);
+        let result = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_extension_load(IExtension(me), IShareSys(sys), late));
+
+        match result {
+            Ok(result) => match result {
+                Ok(result) => true,
+                Err(err) => {
+                    let err = CString::new(err.to_string()).unwrap_or_else(|_| c_str!("load error message contained NUL byte").into());
+                    libc::strncpy(error, err.as_ptr(), maxlength);
+                    false
+                }
+            },
+            Err(err) => {
+                let msg = format!(
+                    "load panicked: {}",
+                    if let Some(str_slice) = err.downcast_ref::<&'static str>() {
+                        str_slice
+                    } else if let Some(string) = err.downcast_ref::<String>() {
+                        string
+                    } else {
+                        "unknown message"
+                    }
+                );
+
+                let msg = CString::new(msg).unwrap_or_else(|_| c_str!("load panic message contained NUL byte").into());
+                libc::strncpy(error, msg.as_ptr(), maxlength);
                 false
             }
         }
@@ -283,35 +304,48 @@ impl<T: IExtensionInterface + ExtensionMetadata> IExtensionInterfaceAdapter<T> {
 
     #[vtable_override]
     unsafe fn on_extension_unload(this: IExtensionInterfacePtr) {
-        (*this.cast::<Self>()).delegate.on_extension_unload()
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_extension_unload());
     }
 
     #[vtable_override]
     unsafe fn on_extensions_all_loaded(this: IExtensionInterfacePtr) {
-        (*this.cast::<Self>()).delegate.on_extensions_all_loaded()
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_extensions_all_loaded());
     }
 
     #[vtable_override]
     unsafe fn on_extension_pause_change(this: IExtensionInterfacePtr, pause: bool) {
-        (*this.cast::<Self>()).delegate.on_extension_pause_change(pause)
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_extension_pause_change(pause));
     }
 
     #[vtable_override]
     unsafe fn query_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) -> bool {
-        (*this.cast::<Self>()).delegate.query_interface_drop(SMInterface(interface))
+        let result = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.query_interface_drop(SMInterface(interface)));
+
+        match result {
+            Ok(result) => result,
+            Err(_) => false,
+        }
     }
 
     #[vtable_override]
     unsafe fn notify_interface_drop(this: IExtensionInterfacePtr, interface: SMInterfacePtr) {
-        (*this.cast::<Self>()).delegate.notify_interface_drop(SMInterface(interface))
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.notify_interface_drop(SMInterface(interface)));
     }
 
     #[vtable_override]
     unsafe fn query_running(this: IExtensionInterfacePtr, error: *mut c_char, maxlength: size_t) -> bool {
-        match (*this.cast::<Self>()).delegate.query_running() {
+        let result = std::panic::catch_unwind(|| match (*this.cast::<Self>()).delegate.query_running() {
             Ok(_) => true,
             Err(str) => {
                 libc::strncpy(error, str.as_ptr(), maxlength);
+                false
+            }
+        });
+
+        match result {
+            Ok(result) => result,
+            Err(_) => {
+                libc::strncpy(error, c_str!("query running callback panicked").as_ptr(), maxlength);
                 false
             }
         }
@@ -359,17 +393,17 @@ impl<T: IExtensionInterface + ExtensionMetadata> IExtensionInterfaceAdapter<T> {
 
     #[vtable_override]
     unsafe fn on_core_map_start(this: IExtensionInterfacePtr, edict_list: *mut c_void, edict_count: c_int, client_max: c_int) {
-        (*this.cast::<Self>()).delegate.on_core_map_start(edict_list, edict_count, client_max)
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_core_map_start(edict_list, edict_count, client_max));
     }
 
     #[vtable_override]
     unsafe fn on_dependencies_dropped(this: IExtensionInterfacePtr) {
-        (*this.cast::<Self>()).delegate.on_dependencies_dropped()
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_dependencies_dropped());
     }
 
     #[vtable_override]
     unsafe fn on_core_map_end(this: IExtensionInterfacePtr) {
-        (*this.cast::<Self>()).delegate.on_core_map_end()
+        let _ = std::panic::catch_unwind(|| (*this.cast::<Self>()).delegate.on_core_map_end());
     }
 }
 
@@ -400,7 +434,7 @@ impl std::fmt::Display for IsRunningError<'_> {
     }
 }
 
-impl std::error::Error for IsRunningError<'_> {}
+impl Error for IsRunningError<'_> {}
 
 #[derive(Debug)]
 pub struct IExtension(IExtensionPtr);
@@ -508,16 +542,26 @@ pub struct IShareSysVtable {
 #[derive(Debug)]
 pub enum RequestInterfaceError {
     InvalidName(NulError),
-    InvalidInterface(),
+    InvalidInterface(String, u32),
 }
 
 impl std::fmt::Display for RequestInterfaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        std::fmt::Debug::fmt(self, f)
+        match self {
+            RequestInterfaceError::InvalidName(err) => write!(f, "invalid interface name: {}", err),
+            RequestInterfaceError::InvalidInterface(name, ver) => write!(f, "failed to get {} interface version {}", name, ver),
+        }
     }
 }
 
-impl std::error::Error for RequestInterfaceError {}
+impl Error for RequestInterfaceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            RequestInterfaceError::InvalidName(err) => Some(err),
+            RequestInterfaceError::InvalidInterface(_, _) => None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct IShareSys(IShareSysPtr);
@@ -539,7 +583,7 @@ impl IShareSys {
             if res {
                 Ok(SMInterface(iface))
             } else {
-                Err(RequestInterfaceError::InvalidInterface())
+                Err(RequestInterfaceError::InvalidInterface(name.into(), version))
             }
         }
     }
@@ -664,7 +708,7 @@ impl std::fmt::Display for SPError {
     }
 }
 
-impl std::error::Error for SPError {}
+impl Error for SPError {}
 
 pub type IPluginContextPtr = *mut *mut IPluginContextVtable;
 
@@ -744,7 +788,7 @@ impl std::fmt::Display for GetFunctionError {
     }
 }
 
-impl std::error::Error for GetFunctionError {}
+impl Error for GetFunctionError {}
 
 impl IPluginContext {
     pub fn local_to_phys_addr(&self, local: cell_t) -> Result<&mut cell_t, SPError> {
@@ -773,7 +817,7 @@ impl IPluginContext {
 
     pub fn throw_native_error(&self, err: String) -> cell_t {
         let fmt = c_str!("%s");
-        let err = CString::new(err).unwrap_or_else(|_| c_str!("ThrowNativeError message contained NUL byte").into());
+        let err = CString::new(err).unwrap_or_else(|_| c_str!("native error message contained NUL byte").into());
         unsafe { virtual_call_varargs!(ThrowNativeError, self.0, fmt.as_ptr(), err.as_ptr()) }
     }
 
@@ -1088,16 +1132,29 @@ pub struct IForwardManagerVtable {
 #[derive(Debug)]
 pub enum CreateForwardError {
     InvalidName(NulError),
-    InvalidParams,
+    InvalidParams(Option<String>),
 }
 
 impl std::fmt::Display for CreateForwardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        std::fmt::Debug::fmt(self, f)
+        match self {
+            CreateForwardError::InvalidName(err) => write!(f, "invalid forward name: {}", err),
+            CreateForwardError::InvalidParams(name) => match name {
+                Some(name) => write!(f, "failed to create forward {}: invalid params", name),
+                None => write!(f, "failed to create forward anonymous forward: invalid params"),
+            },
+        }
     }
 }
 
-impl std::error::Error for CreateForwardError {}
+impl Error for CreateForwardError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            CreateForwardError::InvalidName(err) => Some(err),
+            CreateForwardError::InvalidParams(_) => None,
+        }
+    }
+}
 
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IForwardManager", 4)]
@@ -1111,7 +1168,7 @@ impl IForwardManager {
             let forward = virtual_call_varargs!(CreateForward, self.0, c_name.as_ptr(), et, params.len() as u32, params.as_ptr());
 
             if forward.is_null() {
-                Err(CreateForwardError::InvalidParams)
+                Err(CreateForwardError::InvalidParams(Some(name.into())))
             } else {
                 Ok(Forward(forward, self.0))
             }
@@ -1133,7 +1190,7 @@ impl IForwardManager {
             let forward = virtual_call_varargs!(CreateForwardEx, self.0, c_name, et, params.len() as u32, params.as_ptr());
 
             if forward.is_null() {
-                Err(CreateForwardError::InvalidParams)
+                Err(CreateForwardError::InvalidParams(name.map(|name| name.into())))
             } else {
                 Ok(ChangeableForward(forward, self.0))
             }
@@ -1251,7 +1308,7 @@ impl std::fmt::Display for HandleError {
     }
 }
 
-impl std::error::Error for HandleError {}
+impl Error for HandleError {}
 
 pub type IHandleTypeDispatchPtr = *mut *mut IHandleTypeDispatchVtable;
 
@@ -1309,7 +1366,8 @@ impl<T> IHandleTypeDispatchAdapter<T> {
         // for people to implement this properly. See also: https://github.com/rust-lang/rust/issues/63073
         let object = object as *mut T;
         *size = std::mem::size_of_val(&*object) as u32;
-        true
+
+        *size != 0
     }
 }
 
@@ -1466,21 +1524,47 @@ impl<T> HandleType<T> {
     }
 }
 
+#[derive(Debug)]
+pub enum CreateHandleTypeError {
+    InvalidName(NulError),
+    HandleError(String, HandleError),
+}
+
+impl std::fmt::Display for CreateHandleTypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            CreateHandleTypeError::InvalidName(err) => write!(f, "invalid handle type name: {}", err),
+            CreateHandleTypeError::HandleError(name, err) => write!(f, "failed to create handle type {}: {}", name, err),
+        }
+    }
+}
+
+impl Error for CreateHandleTypeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            CreateHandleTypeError::InvalidName(err) => Some(err),
+            CreateHandleTypeError::HandleError(_, err) => Some(err),
+        }
+    }
+}
+
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IHandleSys", 5)]
 pub struct IHandleSys(IHandleSysPtr);
 
 impl IHandleSys {
-    pub fn create_type<T>(&self, name: &str, ident: IdentityTokenPtr) -> Result<HandleType<T>, HandleError> {
+    pub fn create_type<T>(&self, name: &str, ident: IdentityTokenPtr) -> Result<HandleType<T>, CreateHandleTypeError> {
         unsafe {
-            let c_name = CString::new(name).unwrap(); // TODO
+            let c_name = CString::new(name).map_err(CreateHandleTypeError::InvalidName)?;
             let dispatch = Box::into_raw(Box::new(IHandleTypeDispatchAdapter::<T>::new()));
+
             let mut err: HandleError = HandleError::None;
             let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId::invalid(), null(), null(), ident, &mut err);
+
             if id.is_valid() {
                 Ok(HandleType { iface: self.0, id, dispatch, ident })
             } else {
-                Err(err)
+                Err(CreateHandleTypeError::HandleError(name.into(), err))
             }
         }
     }
@@ -1741,7 +1825,7 @@ impl std::fmt::Display for DummyNativeError {
     }
 }
 
-impl std::error::Error for DummyNativeError {}
+impl Error for DummyNativeError {}
 
 impl NativeResult for () {
     type Ok = i32;
@@ -1793,7 +1877,7 @@ where
 /// This is used internally by the `#[native]` attribute.
 pub fn safe_native_invoke<F>(ctx: IPluginContextPtr, f: F) -> cell_t
 where
-    F: FnOnce(&IPluginContext) -> Result<cell_t, Box<dyn std::error::Error>> + std::panic::UnwindSafe,
+    F: FnOnce(&IPluginContext) -> Result<cell_t, Box<dyn Error>> + std::panic::UnwindSafe,
 {
     let ctx = IPluginContext(ctx);
     let result = std::panic::catch_unwind(|| f(&ctx));

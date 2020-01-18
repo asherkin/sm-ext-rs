@@ -20,8 +20,7 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, cell_t, native, register_natives, HandleError, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
-use std::ffi::CString;
+use sm_ext::{cell_t, native, register_natives, HandleError, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
 
 #[derive(Debug)]
 struct RustContext(i32);
@@ -82,14 +81,13 @@ impl MyExtension {
 }
 
 impl IExtensionInterface for MyExtension {
-    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!(">>> Rusty extension loaded! me = {:?}, sys = {:?}, late = {:?}", myself, sys, late);
 
-        let handlesys: IHandleSys = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IHandleSys interface"))?;
+        let handlesys: IHandleSys = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", handlesys.get_interface_name(), handlesys.get_interface_version());
 
-        let handle_type: HandleType<RustContext> = handlesys.create_type("RustContext", myself.get_identity()).map_err(|_| c_str!("Failed to create RustContext Handle type"))?;
-        self.handle_type = Some(handle_type);
+        self.handle_type = Some(handlesys.create_type("RustContext", myself.get_identity())?);
 
         register_natives!(
             &sys,

@@ -22,7 +22,6 @@
 
 use sm_ext::{c_str, cell_t, native, register_natives, ExecType, Executable, GameFrameHookId, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IPluginFunction, IShareSys, ISourceMod, ParamType, SMExtension, SMInterfaceApi};
 use std::error::Error;
-use std::ffi::CString;
 
 #[native]
 fn test_native(ctx: &IPluginContext, mut func: IPluginFunction) -> Result<cell_t, Box<dyn Error>> {
@@ -88,13 +87,13 @@ impl MyExtension {
 }
 
 impl IExtensionInterface for MyExtension {
-    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!(">>> Rusty extension loaded! me = {:?}, sys = {:?}, late = {:?}", myself, sys, late);
 
-        let forward_manager: IForwardManager = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IForwardManager interface"))?;
+        let forward_manager: IForwardManager = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", forward_manager.get_interface_name(), forward_manager.get_interface_version());
 
-        let sourcemod: ISourceMod = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get ISourceMod interface"))?;
+        let sourcemod: ISourceMod = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", sourcemod.get_interface_name(), sourcemod.get_interface_version());
 
         sourcemod.add_frame_action(|| {

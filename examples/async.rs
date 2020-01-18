@@ -25,10 +25,9 @@
 use async_std::task;
 use futures::executor::{LocalPool, LocalSpawner};
 use futures::task::LocalSpawnExt;
-use sm_ext::{c_str, native, register_natives, CallableParam, ExecType, Executable, GameFrameHookId, HandleId, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
+use sm_ext::{native, register_natives, CallableParam, ExecType, Executable, GameFrameHookId, HandleId, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
 use std::cell::RefCell;
 use std::error::Error;
-use std::ffi::CString;
 use std::time::Duration;
 
 struct IntHandle(i32);
@@ -111,21 +110,21 @@ impl MyExtension {
 }
 
 impl IExtensionInterface for MyExtension {
-    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), CString> {
+    fn on_extension_load(&mut self, myself: IExtension, sys: IShareSys, late: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!(">>> Rusty extension loaded! me = {:?}, sys = {:?}, late = {:?}", myself, sys, late);
 
-        let forward_manager: IForwardManager = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IForwardManager interface"))?;
+        let forward_manager: IForwardManager = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", forward_manager.get_interface_name(), forward_manager.get_interface_version());
 
-        let sourcemod: ISourceMod = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get ISourceMod interface"))?;
+        let sourcemod: ISourceMod = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", sourcemod.get_interface_name(), sourcemod.get_interface_version());
 
-        let handlesys: IHandleSys = sys.request_interface(&myself).map_err(|_| c_str!("Failed to get IHandleSys interface"))?;
+        let handlesys: IHandleSys = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", handlesys.get_interface_name(), handlesys.get_interface_version());
 
         self.frame_hook = Some(sourcemod.add_game_frame_hook(on_game_frame));
 
-        self.handle_type = Some(handlesys.create_type("IntHandle", myself.get_identity()).map_err(|_| c_str!("Failed to create handle type"))?);
+        self.handle_type = Some(handlesys.create_type("IntHandle", myself.get_identity())?);
 
         register_natives!(
             &sys,
