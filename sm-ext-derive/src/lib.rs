@@ -79,7 +79,7 @@ pub fn derive_extension_metadata(input: proc_macro::TokenStream) -> proc_macro::
         //     }
         // }
 
-        impl sm_ext::IExtensionMetadata for #name {
+        impl sm_ext::ExtensionMetadata for #name {
             fn get_extension_name(&self) -> &'static ::std::ffi::CStr {
                 #extension_name
             }
@@ -500,7 +500,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
 
                 let count: i32 = (*args).into();
                 if count < #args_minimum {
-                    return Err(format!("Not enough arguments, got {}, expected at least {}", count, #args_minimum).into());
+                    return Err(format!("not enough arguments, got {}, expected at least {}", count, #args_minimum).into());
                 }
 
                 let result = #callback_ident(
@@ -508,7 +508,7 @@ pub fn native(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                 ).into_result()?;
 
                 Ok(result.try_into_plugin(&ctx)
-                    .map_err(|err| format!("Error processing return value: {}", err))?)
+                    .map_err(|err| format!("error processing return value: {}", err))?)
             })
         }
     });
@@ -697,7 +697,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
 
         output.extend(quote_spanned!(forward.ident.span() =>
             #[allow(non_camel_case_types)]
-            struct #type_ident<'a>(&'a mut sm_ext::IForward);
+            struct #type_ident<'a>(&'a mut sm_ext::Forward);
         ));
 
         let execute_return = match &forward_call_return {
@@ -708,7 +708,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
         output.extend(quote_spanned!(forward.ident.span() =>
             impl #type_ident<'_> {
                 fn execute(&mut self, #forward_call_args) -> Result<#forward_call_return, sm_ext::SPError> {
-                    use sm_ext::ExecutableApi;
+                    use sm_ext::Executable;
                     #forward_call_pushes
                     #execute_return
                 }
@@ -717,7 +717,7 @@ pub fn forwards(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -
 
         output_thread_locals.extend(quote_spanned!(forward.ident.span() =>
             #[allow(non_upper_case_globals)]
-            static #global_ident: std::cell::RefCell<Option<sm_ext::IForward>> = std::cell::RefCell::new(None);
+            static #global_ident: std::cell::RefCell<Option<sm_ext::Forward>> = std::cell::RefCell::new(None);
         ));
 
         output_trait.extend(quote_spanned!(forward.ident.span() =>

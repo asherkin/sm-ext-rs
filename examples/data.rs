@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, cell_t, native, register_natives, ExecType, ExecutableApi, GameFrameHookId, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IPluginFunction, IShareSys, ISourceMod, ParamType, SMExtension, SMInterfaceApi};
+use sm_ext::{c_str, cell_t, native, register_natives, ExecType, Executable, GameFrameHookId, IExtension, IExtensionInterface, IForwardManager, IPluginContext, IPluginFunction, IShareSys, ISourceMod, ParamType, SMExtension, SMInterfaceApi};
 use std::error::Error;
 use std::ffi::CString;
 

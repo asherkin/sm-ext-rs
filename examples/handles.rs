@@ -20,13 +20,13 @@
 //! }
 //! ```
 
-use sm_ext::{c_str, cell_t, native, register_natives, AssociatedHandleType, HandleError, HandleRef, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
+use sm_ext::{c_str, cell_t, native, register_natives, HandleError, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
 use std::ffi::CString;
 
 #[derive(Debug)]
 struct RustContext(i32);
 
-impl AssociatedHandleType for RustContext {
+impl HasHandleType for RustContext {
     fn handle_type<'ty>() -> &'ty HandleType<Self> {
         MyExtension::handle_type()
     }
@@ -36,7 +36,7 @@ impl<'ctx> TryIntoPlugin<'ctx> for RustContext {
     type Error = HandleError;
 
     fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<cell_t, Self::Error> {
-        let handle = MyExtension::handle_type().create(self, ctx.get_identity())?;
+        let handle = MyExtension::handle_type().create_handle(self, ctx.get_identity())?;
 
         Ok(handle.into())
     }

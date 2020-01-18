@@ -12,6 +12,8 @@
 //! public void Callback(RustHandle a)
 //! {
 //!     PrintToServer(">>> %d -> %d", a, a.Read());
+//!
+//!     delete a;
 //! }
 //!
 //! public void OnPluginStart()
@@ -23,17 +25,23 @@
 use async_std::task;
 use futures::executor::{LocalPool, LocalSpawner};
 use futures::task::LocalSpawnExt;
-use sm_ext::{c_str, native, register_natives, CallableParam, ExecType, ExecutableApi, GameFrameHookId, HandleId, HandleRef, HandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
+use sm_ext::{c_str, native, register_natives, CallableParam, ExecType, Executable, GameFrameHookId, HandleId, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
 use std::cell::RefCell;
 use std::error::Error;
 use std::ffi::CString;
 use std::time::Duration;
 
-#[native]
-fn native_handle_read(ctx: &IPluginContext, handle: HandleId) -> Result<i32, Box<dyn Error>> {
-    let object = HandleRef::new(MyExtension::handle_type(), handle, ctx.get_identity())?;
+struct IntHandle(i32);
 
-    Ok(*object)
+impl HasHandleType for IntHandle {
+    fn handle_type<'ty>() -> &'ty HandleType<Self> {
+        MyExtension::handle_type()
+    }
+}
+
+#[native]
+fn native_handle_read(_ctx: &IPluginContext, handle: HandleRef<IntHandle>) -> Result<i32, Box<dyn Error>> {
+    Ok(handle.0)
 }
 
 #[native]
@@ -41,15 +49,14 @@ fn test_native(ctx: &IPluginContext, mut func: IPluginFunction) -> Result<(), Bo
     let mut forward = MyExtension::forwardsys().create_private_forward(None, ExecType::Ignore, &[HandleId::param_type()])?;
     forward.add_function(&mut func);
 
-    // TODO: The helper for this pair of ops is currently on AssociatedHandleType
-    let handle = MyExtension::handle_type().create(0, ctx.get_identity())?;
-    let mut this = HandleRef::new(MyExtension::handle_type(), handle, ctx.get_identity())?;
+    let mut this = IntHandle(0).into_handle()?;
+    let handle = this.clone_handle(ctx.get_identity())?;
 
     MyExtension::spawner().spawn_local(async move {
         let future = async move {
             task::sleep(Duration::from_secs(5)).await;
 
-            *this = 42;
+            this.0 = 42;
 
             forward.push(handle)?;
             forward.execute()?;
@@ -79,7 +86,7 @@ pub struct MyExtension {
     forwardsys: Option<IForwardManager>,
     sourcemod: Option<ISourceMod>,
     frame_hook: Option<GameFrameHookId>,
-    handle_type: Option<HandleType<i32>>,
+    handle_type: Option<HandleType<IntHandle>>,
     pool: RefCell<LocalPool>,
 }
 
@@ -94,7 +101,7 @@ impl MyExtension {
         Self::get().forwardsys.as_ref().unwrap()
     }
 
-    fn handle_type() -> &'static HandleType<i32> {
+    fn handle_type() -> &'static HandleType<IntHandle> {
         Self::get().handle_type.as_ref().unwrap()
     }
 
@@ -118,7 +125,7 @@ impl IExtensionInterface for MyExtension {
 
         self.frame_hook = Some(sourcemod.add_game_frame_hook(on_game_frame));
 
-        self.handle_type = Some(handlesys.create_type("RustHandle", myself.get_identity()).map_err(|_| c_str!("Failed to create handle type"))?);
+        self.handle_type = Some(handlesys.create_type("IntHandle", myself.get_identity()).map_err(|_| c_str!("Failed to create handle type"))?);
 
         register_natives!(
             &sys,

@@ -45,10 +45,10 @@ impl std::fmt::Display for cell_t {
 }
 
 /// Trait to support conversions to/from [`cell_t`] that require an [`IPluginContext`] for access to plugin memory.
-pub trait TryFromPlugin<'a, T = cell_t>: Sized {
+pub trait TryFromPlugin<'ctx, T = cell_t>: Sized {
     type Error;
 
-    fn try_from_plugin(ctx: &'a crate::IPluginContext, value: T) -> Result<Self, Self::Error>;
+    fn try_from_plugin(ctx: &'ctx crate::IPluginContext, value: T) -> Result<Self, Self::Error>;
 }
 
 impl<T, U> TryFromPlugin<'_, T> for U
@@ -66,19 +66,19 @@ where
 ///
 /// As with Rust's [`TryInto`](std::convert::TryInto) and [`TryFrom`](std::convert::TryFrom), this is implemented automatically
 /// for types that implement [`TryFromPlugin`] which you should prefer to implement instead.
-pub trait TryIntoPlugin<'a, T = cell_t>: Sized {
+pub trait TryIntoPlugin<'ctx, T = cell_t>: Sized {
     type Error;
 
-    fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<T, Self::Error>;
+    fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<T, Self::Error>;
 }
 
-impl<'a, T, U> TryIntoPlugin<'a, U> for T
+impl<'ctx, T, U> TryIntoPlugin<'ctx, U> for T
 where
-    U: TryFromPlugin<'a, T>,
+    U: TryFromPlugin<'ctx, T>,
 {
     type Error = U::Error;
 
-    fn try_into_plugin(self, ctx: &'a IPluginContext) -> Result<U, U::Error> {
+    fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<U, U::Error> {
         U::try_from_plugin(ctx, self)
     }
 }
@@ -107,45 +107,45 @@ impl From<cell_t> for f32 {
     }
 }
 
-impl<'a> TryFromPlugin<'a> for &'a CStr {
+impl<'ctx> TryFromPlugin<'ctx> for &'ctx CStr {
     type Error = SPError;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         Ok(ctx.local_to_string(value)?)
     }
 }
 
-impl<'a> TryFromPlugin<'a> for &'a str {
+impl<'ctx> TryFromPlugin<'ctx> for &'ctx str {
     type Error = Box<dyn std::error::Error>;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         Ok(ctx.local_to_string(value)?.to_str()?)
     }
 }
 
 // TODO: These &mut implementations seem risky, maybe a SPRef/SPString/SPArray wrapper object would be a better way to go...
 
-impl<'a> TryFromPlugin<'a> for &'a mut cell_t {
+impl<'ctx> TryFromPlugin<'ctx> for &'ctx mut cell_t {
     type Error = SPError;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         Ok(ctx.local_to_phys_addr(value)?)
     }
 }
 
-impl<'a> TryFromPlugin<'a> for &'a mut i32 {
+impl<'ctx> TryFromPlugin<'ctx> for &'ctx mut i32 {
     type Error = SPError;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         let cell: &mut cell_t = value.try_into_plugin(ctx)?;
         unsafe { Ok(&mut *(cell as *mut cell_t as *mut i32)) }
     }
 }
 
-impl<'a> TryFromPlugin<'a> for &'a mut f32 {
+impl<'ctx> TryFromPlugin<'ctx> for &'ctx mut f32 {
     type Error = SPError;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         let cell: &mut cell_t = value.try_into_plugin(ctx)?;
         unsafe { Ok(&mut *(cell as *mut cell_t as *mut f32)) }
     }
@@ -161,7 +161,9 @@ pub struct NativeInfo {
     pub func: Option<unsafe extern "C" fn(ctx: IPluginContextPtr, args: *const cell_t) -> cell_t>,
 }
 
-pub struct IdentityToken();
+pub struct IdentityToken {
+    _private: [u8; 0],
+}
 
 pub type IdentityTokenPtr = *mut IdentityToken;
 
@@ -211,7 +213,7 @@ pub trait IExtensionInterface {
     fn on_dependencies_dropped(&mut self) {}
 }
 
-pub trait IExtensionMetadata {
+pub trait ExtensionMetadata {
     fn get_extension_name(&self) -> &'static CStr;
     fn get_extension_url(&self) -> &'static CStr;
     fn get_extension_tag(&self) -> &'static CStr;
@@ -222,12 +224,12 @@ pub trait IExtensionMetadata {
 }
 
 #[repr(C)]
-pub struct IExtensionInterfaceAdapter<T: IExtensionInterface + IExtensionMetadata> {
+pub struct IExtensionInterfaceAdapter<T: IExtensionInterface + ExtensionMetadata> {
     vtable: *mut IExtensionInterfaceVtable,
     pub delegate: T,
 }
 
-impl<T: IExtensionInterface + IExtensionMetadata> Drop for IExtensionInterfaceAdapter<T> {
+impl<T: IExtensionInterface + ExtensionMetadata> Drop for IExtensionInterfaceAdapter<T> {
     fn drop(&mut self) {
         unsafe {
             drop(Box::from_raw(self.vtable));
@@ -236,7 +238,7 @@ impl<T: IExtensionInterface + IExtensionMetadata> Drop for IExtensionInterfaceAd
 }
 
 // TODO: The implementations in here need to catch panics in the delegate functions.
-impl<T: IExtensionInterface + IExtensionMetadata> IExtensionInterfaceAdapter<T> {
+impl<T: IExtensionInterface + ExtensionMetadata> IExtensionInterfaceAdapter<T> {
     pub fn new(delegate: T) -> IExtensionInterfaceAdapter<T> {
         let vtable = IExtensionInterfaceVtable {
             GetExtensionVersion: IExtensionInterfaceAdapter::<T>::get_extension_version,
@@ -387,10 +389,18 @@ pub struct IExtensionVtable {
 }
 
 #[derive(Debug)]
-pub enum IsRunningError<'a> {
-    WithReason(&'a str),
+pub enum IsRunningError<'str> {
+    WithReason(&'str str),
     InvalidReason(Utf8Error),
 }
+
+impl std::fmt::Display for IsRunningError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for IsRunningError<'_> {}
 
 #[derive(Debug)]
 pub struct IExtension(IExtensionPtr);
@@ -501,6 +511,14 @@ pub enum RequestInterfaceError {
     InvalidInterface(),
 }
 
+impl std::fmt::Display for RequestInterfaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for RequestInterfaceError {}
+
 #[derive(Debug)]
 pub struct IShareSys(IShareSysPtr);
 
@@ -609,39 +627,39 @@ pub enum SPError {
 impl std::fmt::Display for SPError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.pad(match self {
-            SPError::None => "No error occurred",
-            SPError::FileFormat => "Unrecognizable file format",
-            SPError::Decompressor => "Decompressor was not found",
-            SPError::HeapLow => "Not enough space on the heap",
-            SPError::Param => "Invalid parameter or parameter type",
-            SPError::InvalidAddress => "Invalid plugin address",
-            SPError::NotFound => "Object or index not found",
-            SPError::Index => "Invalid index or index not found",
-            SPError::StackLow => "Not enough space on the stack",
-            SPError::NotDebugging => "Debug section not found or debug not enabled",
-            SPError::InvalidInstruction => "Invalid instruction",
-            SPError::MemAccess => "Invalid memory access",
-            SPError::StackMin => "Stack went below stack boundary",
-            SPError::HeapMin => "Heap went below heap boundary",
-            SPError::DivideByZero => "Divide by zero",
-            SPError::ArrayBounds => "Array index is out of bounds",
-            SPError::InstructionParam => "Instruction contained invalid parameter",
-            SPError::StackLeak => "Stack memory leaked by native",
-            SPError::HeapLeak => "Heap memory leaked by native",
-            SPError::ArrayTooBig => "Dynamic array is too big",
-            SPError::TrackerBounds => "Tracker stack is out of bounds",
-            SPError::InvalidNative => "Native is not bound",
-            SPError::ParamsMax => "Maximum number of parameters reached",
-            SPError::Native => "Native detected error",
-            SPError::NotRunnable => "Plugin not runnable",
-            SPError::Aborted => "Call was aborted",
-            SPError::CodeTooOld => "Plugin format is too old",
-            SPError::CodeTooNew => "Plugin format is too new",
-            SPError::OutOfMemory => "Out of memory",
-            SPError::IntegerOverflow => "Integer overflow",
-            SPError::Timeout => "Script execution timed out",
-            SPError::User => "Custom error",
-            SPError::Fatal => "Fatal error",
+            SPError::None => "no error occurred",
+            SPError::FileFormat => "unrecognizable file format",
+            SPError::Decompressor => "decompressor was not found",
+            SPError::HeapLow => "not enough space on the heap",
+            SPError::Param => "invalid parameter or parameter type",
+            SPError::InvalidAddress => "invalid plugin address",
+            SPError::NotFound => "object or index not found",
+            SPError::Index => "invalid index or index not found",
+            SPError::StackLow => "not enough space on the stack",
+            SPError::NotDebugging => "debug section not found or debug not enabled",
+            SPError::InvalidInstruction => "invalid instruction",
+            SPError::MemAccess => "invalid memory access",
+            SPError::StackMin => "stack went below stack boundary",
+            SPError::HeapMin => "heap went below heap boundary",
+            SPError::DivideByZero => "divide by zero",
+            SPError::ArrayBounds => "array index is out of bounds",
+            SPError::InstructionParam => "instruction contained invalid parameter",
+            SPError::StackLeak => "stack memory leaked by native",
+            SPError::HeapLeak => "heap memory leaked by native",
+            SPError::ArrayTooBig => "dynamic array is too big",
+            SPError::TrackerBounds => "tracker stack is out of bounds",
+            SPError::InvalidNative => "native is not bound",
+            SPError::ParamsMax => "maximum number of parameters reached",
+            SPError::Native => "native detected error",
+            SPError::NotRunnable => "plugin not runnable",
+            SPError::Aborted => "call was aborted",
+            SPError::CodeTooOld => "plugin format is too old",
+            SPError::CodeTooNew => "plugin format is too new",
+            SPError::OutOfMemory => "out of memory",
+            SPError::IntegerOverflow => "integer overflow",
+            SPError::Timeout => "script execution timed out",
+            SPError::User => "custom error",
+            SPError::Fatal => "fatal error",
         })
     }
 }
@@ -805,7 +823,7 @@ pub struct IPluginFunctionVtable {
 #[derive(Debug, ICallableApi)]
 pub struct IPluginFunction<'ctx>(IPluginFunctionPtr, &'ctx IPluginContext);
 
-impl ExecutableApi for IPluginFunction<'_> {
+impl Executable for IPluginFunction<'_> {
     fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
@@ -818,10 +836,10 @@ impl ExecutableApi for IPluginFunction<'_> {
     }
 }
 
-impl<'a> TryFromPlugin<'a> for IPluginFunction<'a> {
+impl<'ctx> TryFromPlugin<'ctx> for IPluginFunction<'ctx> {
     type Error = GetFunctionError;
 
-    fn try_from_plugin(ctx: &'a IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
+    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
         ctx.get_function_by_id(value.0 as u32)
     }
 }
@@ -975,7 +993,7 @@ pub trait ICallableApi {
     fn push_string(&mut self, string: &CStr) -> Result<(), SPError>;
 }
 
-pub trait ExecutableApi: ICallableApi + Sized {
+pub trait Executable: ICallableApi + Sized {
     fn execute(&mut self) -> Result<cell_t, SPError>;
 
     fn push<T: CallableParam>(&mut self, param: T) -> Result<(), SPError> {
@@ -984,15 +1002,15 @@ pub trait ExecutableApi: ICallableApi + Sized {
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IForward(IForwardPtr, IForwardManagerPtr);
+pub struct Forward(IForwardPtr, IForwardManagerPtr);
 
-impl Drop for IForward {
+impl Drop for Forward {
     fn drop(&mut self) {
         IForwardManager(self.1).release_forward(&mut self.0);
     }
 }
 
-impl ExecutableApi for IForward {
+impl Executable for Forward {
     fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
@@ -1005,22 +1023,22 @@ impl ExecutableApi for IForward {
     }
 }
 
-impl IForward {
+impl Forward {
     pub fn get_function_count(&self) -> u32 {
         unsafe { virtual_call!(GetFunctionCount, self.0) }
     }
 }
 
 #[derive(Debug, ICallableApi)]
-pub struct IChangeableForward(IChangeableForwardPtr, IForwardManagerPtr);
+pub struct ChangeableForward(IChangeableForwardPtr, IForwardManagerPtr);
 
-impl Drop for IChangeableForward {
+impl Drop for ChangeableForward {
     fn drop(&mut self) {
         IForwardManager(self.1).release_forward(&mut (self.0 as IForwardPtr));
     }
 }
 
-impl ExecutableApi for IChangeableForward {
+impl Executable for ChangeableForward {
     fn execute(&mut self) -> Result<cell_t, SPError> {
         unsafe {
             let mut result: cell_t = 0.into();
@@ -1033,7 +1051,7 @@ impl ExecutableApi for IChangeableForward {
     }
 }
 
-impl IChangeableForward {
+impl ChangeableForward {
     pub fn get_function_count(&self) -> u32 {
         unsafe { virtual_call!(GetFunctionCount, self.0) }
     }
@@ -1086,7 +1104,7 @@ impl std::error::Error for CreateForwardError {}
 pub struct IForwardManager(IForwardManagerPtr);
 
 impl IForwardManager {
-    pub fn create_global_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<IForward, CreateForwardError> {
+    pub fn create_global_forward(&self, name: &str, et: ExecType, params: &[ParamType]) -> Result<Forward, CreateForwardError> {
         let c_name = CString::new(name).map_err(CreateForwardError::InvalidName)?;
 
         unsafe {
@@ -1095,12 +1113,12 @@ impl IForwardManager {
             if forward.is_null() {
                 Err(CreateForwardError::InvalidParams)
             } else {
-                Ok(IForward(forward, self.0))
+                Ok(Forward(forward, self.0))
             }
         }
     }
 
-    pub fn create_private_forward(&self, name: Option<&str>, et: ExecType, params: &[ParamType]) -> Result<IChangeableForward, CreateForwardError> {
+    pub fn create_private_forward(&self, name: Option<&str>, et: ExecType, params: &[ParamType]) -> Result<ChangeableForward, CreateForwardError> {
         let c_name = match name {
             Some(name) => Some(CString::new(name).map_err(CreateForwardError::InvalidName)?),
             None => None,
@@ -1117,7 +1135,7 @@ impl IForwardManager {
             if forward.is_null() {
                 Err(CreateForwardError::InvalidParams)
             } else {
-                Ok(IChangeableForward(forward, self.0))
+                Ok(ChangeableForward(forward, self.0))
             }
         }
     }
@@ -1217,18 +1235,18 @@ pub enum HandleError {
 impl std::fmt::Display for HandleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.pad(match self {
-            HandleError::None => "No error",
-            HandleError::Changed => "The handle has been freed and reassigned",
-            HandleError::Type => "The handle has a different type registered",
-            HandleError::Freed => "The handle has been freed",
-            HandleError::Index => "Generic internal indexing error",
-            HandleError::Access => "No access permitted to free this handle",
-            HandleError::Limit => "The limited number of handles has been reached",
-            HandleError::Identity => "The identity token was not usable",
-            HandleError::Owner => "Owners do not match for this operation",
-            HandleError::Version => "Unrecognized security structure version",
-            HandleError::Parameter => "An invalid parameter was passed",
-            HandleError::NoInherit => "This type cannot be inherited",
+            HandleError::None => "no error",
+            HandleError::Changed => "the handle has been freed and reassigned",
+            HandleError::Type => "the handle has a different type registered",
+            HandleError::Freed => "the handle has been freed",
+            HandleError::Index => "generic internal indexing error",
+            HandleError::Access => "no access permitted to free this handle",
+            HandleError::Limit => "the limited number of handles has been reached",
+            HandleError::Identity => "the identity token was not usable",
+            HandleError::Owner => "owners do not match for this operation",
+            HandleError::Version => "unrecognized security structure version",
+            HandleError::Parameter => "an invalid parameter was passed",
+            HandleError::NoInherit => "this type cannot be inherited",
         })
     }
 }
@@ -1352,20 +1370,21 @@ impl<T> Drop for HandleType<T> {
     }
 }
 
-pub trait AssociatedHandleType: Sized {
+/// Implement this trait to allow automatic conversion to [`HandleRef`] from native arguments.
+pub trait HasHandleType: Sized {
     fn handle_type<'ty>() -> &'ty HandleType<Self>;
 
     // TODO: Try and avoid having to read the ptr back from the handle.
     fn into_handle<'ty>(self) -> Result<HandleRef<'ty, Self>, HandleError> {
         let ty = Self::handle_type();
-        let handle = ty.create(self, ty.ident)?;
-        let ptr = ty.read(handle, ty.ident)?;
+        let handle = ty.create_handle(self, ty.ident)?;
+        let ptr = ty.read_handle(handle, ty.ident)?;
 
         Ok(HandleRef { ty, handle, ptr })
     }
 }
 
-impl<'ctx, 'ty, T: AssociatedHandleType> TryFromPlugin<'ctx> for HandleRef<'ty, T> {
+impl<'ctx, 'ty, T: HasHandleType> TryFromPlugin<'ctx> for HandleRef<'ty, T> {
     type Error = HandleError;
 
     fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
@@ -1377,6 +1396,7 @@ impl<'ctx, 'ty, T: AssociatedHandleType> TryFromPlugin<'ctx> for HandleRef<'ty, 
     }
 }
 
+/// Wrapper for a [`HandleId`] that is [`Deref`] to the wrapping type.
 pub struct HandleRef<'ty, T> {
     ty: &'ty HandleType<T>,
     handle: HandleId,
@@ -1385,27 +1405,27 @@ pub struct HandleRef<'ty, T> {
 
 impl<'ty, T> HandleRef<'ty, T> {
     pub fn new(ty: &'ty HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<Self, HandleError> {
-        let ptr = ty.read(handle, owner)?;
-        let owned = ty.clone(handle, owner, ty.ident)?;
+        let ptr = ty.read_handle(handle, owner)?;
+        let owned = ty.clone_handle(handle, owner, ty.ident)?;
 
         Ok(HandleRef { ty, handle: owned, ptr })
     }
 
-    pub fn clone(&self, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
-        self.ty.clone(self.handle, self.ty.ident, new_owner)
+    pub fn clone_handle(&self, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+        self.ty.clone_handle(self.handle, self.ty.ident, new_owner)
     }
 }
 
-impl<'ty, T> Drop for HandleRef<'ty, T> {
+impl<T> Drop for HandleRef<'_, T> {
     fn drop(&mut self) {
-        match self.ty.free(self.handle, self.ty.ident) {
+        match self.ty.free_handle(self.handle, self.ty.ident) {
             Ok(_) => self.handle = HandleId::invalid(),
-            Err(e) => panic!("Invalid handle when dropping HandleRef: {}", e),
+            Err(e) => panic!("invalid handle when dropping HandleRef: {}", e),
         }
     }
 }
 
-impl<'ty, T> Deref for HandleRef<'ty, T> {
+impl<T> Deref for HandleRef<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -1413,32 +1433,35 @@ impl<'ty, T> Deref for HandleRef<'ty, T> {
     }
 }
 
-impl<'ty, T> DerefMut for HandleRef<'ty, T> {
+/// This is unsound if multiple [`HandleRef`]s are created wrapping the same Handle data.
+///
+/// To guarantee safety, do not use mutable HandleRefs but instead use a [`std::cell::RefCell`] wrapper inside your [`HandleType`].
+impl<T> DerefMut for HandleRef<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.ptr }
     }
 }
 
-impl<'ty, T> std::fmt::Debug for HandleRef<'ty, T> {
+impl<T> std::fmt::Debug for HandleRef<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "HandleRef({:08x}, {:?})", self.handle.0, self.ptr)
     }
 }
 
 impl<T> HandleType<T> {
-    pub fn create(&self, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+    pub fn create_handle(&self, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
         IHandleSys(self.iface).create_handle(self, object, owner)
     }
 
-    pub fn clone(&self, handle: HandleId, owner: IdentityTokenPtr, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+    pub fn clone_handle(&self, handle: HandleId, owner: IdentityTokenPtr, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
         IHandleSys(self.iface).clone_handle(self, handle, owner, new_owner)
     }
 
-    pub fn free(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<(), HandleError> {
+    pub fn free_handle(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<(), HandleError> {
         IHandleSys(self.iface).free_handle(self, handle, owner)
     }
 
-    pub fn read(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
+    pub fn read_handle(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
         IHandleSys(self.iface).read_handle(self, handle, owner)
     }
 }
@@ -1597,13 +1620,13 @@ unsafe extern "C" fn frame_action_trampoline<F: FnMut() + 'static>(func: *mut c_
 impl ISourceMod {
     pub fn log_message(&self, myself: &IExtension, msg: String) {
         let fmt = c_str!("%s");
-        let msg = CString::new(msg).expect("Log message contained NUL byte");
+        let msg = CString::new(msg).expect("log message contained NUL byte");
         unsafe { virtual_call_varargs!(LogMessage, self.0, myself.0, fmt.as_ptr(), msg.as_ptr()) }
     }
 
     pub fn log_error(&self, myself: &IExtension, msg: String) {
         let fmt = c_str!("%s");
-        let msg = CString::new(msg).expect("Log message contained NUL byte");
+        let msg = CString::new(msg).expect("log message contained NUL byte");
         unsafe { virtual_call_varargs!(LogError, self.0, myself.0, fmt.as_ptr(), msg.as_ptr()) }
     }
 
@@ -1729,9 +1752,9 @@ impl NativeResult for () {
     }
 }
 
-impl<'a, T> NativeResult for T
+impl<'ctx, T> NativeResult for T
 where
-    T: TryIntoPlugin<'a, cell_t>,
+    T: TryIntoPlugin<'ctx, cell_t>,
 {
     type Ok = T;
     type Err = DummyNativeError;
@@ -1751,9 +1774,9 @@ impl<E> NativeResult for Result<(), E> {
     }
 }
 
-impl<'a, T, E> NativeResult for Result<T, E>
+impl<'ctx, T, E> NativeResult for Result<T, E>
 where
-    T: TryIntoPlugin<'a, cell_t>,
+    T: TryIntoPlugin<'ctx, cell_t>,
 {
     type Ok = T;
     type Err = E;
@@ -1782,13 +1805,13 @@ where
         },
         Err(err) => {
             let msg = format!(
-                "Native panicked: {}",
+                "native panicked: {}",
                 if let Some(str_slice) = err.downcast_ref::<&'static str>() {
                     str_slice
                 } else if let Some(string) = err.downcast_ref::<String>() {
                     string
                 } else {
-                    "Unknown message"
+                    "unknown message"
                 }
             );
 

@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         
-      - name: Install 32-bit Support
+      - name: Install 32-bit support
         if: runner.os == 'Linux'
         run: |
           sudo dpkg --add-architecture i386
