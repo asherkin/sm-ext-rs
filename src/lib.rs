@@ -1398,7 +1398,7 @@ pub struct IHandleSysVtable {
     pub IsVersionCompatible: fn(version: c_uint) -> bool,
 
     // IHandleSys
-    pub CreateType: fn(name: *const c_char, dispatch: IHandleTypeDispatchPtr, parent: HandleTypeId, typeAccess: *const c_void, handleAccess: *const c_void, ident: IdentityTokenPtr, err: *mut HandleError) -> HandleTypeId,
+    pub CreateType: fn(name: *const c_char, dispatch: IHandleTypeDispatchPtr, parent: HandleTypeId, typeAccess: *const c_void, handleAccess: Option<&HandleAccess>, ident: IdentityTokenPtr, err: *mut HandleError) -> HandleTypeId,
     pub RemoveType: fn(ty: HandleTypeId, ident: IdentityTokenPtr) -> bool,
     pub FindHandleType: fn(name: *const c_char, ty: *mut HandleTypeId) -> bool,
     pub CreateHandle: fn(ty: HandleTypeId, object: *mut c_void, owner: IdentityTokenPtr, ident: IdentityTokenPtr, err: *mut HandleError) -> HandleId,
@@ -1406,7 +1406,7 @@ pub struct IHandleSysVtable {
     pub CloneHandle: fn(handle: HandleId, newHandle: *mut HandleId, newOwner: IdentityTokenPtr, security: *const HandleSecurity) -> HandleError,
     pub ReadHandle: fn(handle: HandleId, ty: HandleTypeId, security: *const HandleSecurity, object: *mut *mut c_void) -> HandleError,
     pub InitAccessDefaults: fn(typeAccess: *mut c_void, handleAccess: *mut c_void) -> bool,
-    pub CreateHandleEx: fn(ty: HandleTypeId, object: *mut c_void, security: *const HandleSecurity, access: *const c_void, err: *mut HandleError) -> HandleId,
+    pub CreateHandleEx: fn(ty: HandleTypeId, object: *mut c_void, security: *const HandleSecurity, access: Option<&HandleAccess>, err: *mut HandleError) -> HandleId,
     pub FastCloneHandle: fn(handle: HandleId) -> HandleId,
     pub TypeCheck: fn(given: HandleTypeId, actual: HandleTypeId) -> bool,
 }
@@ -1430,8 +1430,8 @@ impl<T> Drop for HandleType<T> {
 }
 
 impl<T> HandleType<T> {
-    pub fn create_handle(&self, object: Rc<T>, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
-        IHandleSys(self.iface).create_handle(self, object, owner)
+    pub fn create_handle(&self, object: Rc<T>, owner: IdentityTokenPtr, access: Option<&HandleAccess>) -> Result<HandleId, HandleError> {
+        IHandleSys(self.iface).create_handle(self, object, owner, access)
     }
 
     pub fn clone_handle(&self, handle: HandleId, owner: IdentityTokenPtr, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
@@ -1471,18 +1471,51 @@ impl Error for CreateHandleTypeError {
     }
 }
 
+#[repr(C)]
+pub enum HandleAccessRestriction {
+    Any = 0,
+    IdentityOnly = 1,
+    OwnerOnly = 2,
+    OwnerAndIdentity = 3,
+}
+
+#[repr(C)]
+pub struct HandleAccess {
+    version: u32,
+    pub read_access: HandleAccessRestriction,
+    pub delete_access: HandleAccessRestriction,
+    pub clone_access: HandleAccessRestriction,
+}
+
+impl HandleAccess {
+    pub fn new() -> Self {
+        HandleAccess {
+            version: <IHandleSys as RequestableInterface>::get_interface_version(),
+            read_access: HandleAccessRestriction::IdentityOnly,
+            delete_access: HandleAccessRestriction::OwnerOnly,
+            clone_access: HandleAccessRestriction::Any,
+        }
+    }
+}
+
+impl Default for HandleAccess {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, SMInterfaceApi)]
 #[interface("IHandleSys", 5)]
 pub struct IHandleSys(IHandleSysPtr);
 
 impl IHandleSys {
-    pub fn create_type<T>(&self, name: &str, ident: IdentityTokenPtr) -> Result<HandleType<T>, CreateHandleTypeError> {
+    pub fn create_type<T>(&self, name: &str, handle_access: Option<&HandleAccess>, ident: IdentityTokenPtr) -> Result<HandleType<T>, CreateHandleTypeError> {
         unsafe {
             let c_name = CString::new(name).map_err(CreateHandleTypeError::InvalidName)?;
             let dispatch = Box::into_raw(Box::new(IHandleTypeDispatchAdapter::<T>::new()));
 
             let mut err: HandleError = HandleError::None;
-            let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId::invalid(), null(), null(), ident, &mut err);
+            let id = virtual_call!(CreateType, self.0, c_name.as_ptr(), dispatch as IHandleTypeDispatchPtr, HandleTypeId::invalid(), null(), handle_access, ident, &mut err);
 
             if id.is_valid() {
                 Ok(HandleType { iface: self.0, id, dispatch, ident })
@@ -1502,12 +1535,12 @@ impl IHandleSys {
         }
     }
 
-    fn create_handle<T>(&self, ty: &HandleType<T>, object: Rc<T>, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+    fn create_handle<T>(&self, ty: &HandleType<T>, object: Rc<T>, owner: IdentityTokenPtr, access: Option<&HandleAccess>) -> Result<HandleId, HandleError> {
         unsafe {
             let object = Rc::into_raw(object) as *mut c_void;
             let security = HandleSecurity::new(owner, ty.ident);
             let mut err: HandleError = HandleError::None;
-            let id = virtual_call!(CreateHandleEx, self.0, ty.id, object, &security, null(), &mut err);
+            let id = virtual_call!(CreateHandleEx, self.0, ty.id, object, &security, access, &mut err);
             if id.is_valid() {
                 Ok(id)
             } else {

@@ -47,7 +47,7 @@ fn test_native(ctx: &IPluginContext, mut func: IPluginFunction) -> Result<(), Bo
     forward.add_function(&mut func);
 
     let this = Rc::new(RefCell::new(IntHandle(0)));
-    let handle = MyExtension::handle_type().create_handle(this.clone(), ctx.get_identity())?;
+    let handle = MyExtension::handle_type().create_handle(this.clone(), ctx.get_identity(), None)?;
 
     MyExtension::spawner().spawn_local(async move {
         let future = async move {
@@ -125,7 +125,7 @@ impl IExtensionInterface for MyExtension {
 
         self.frame_hook = Some(sourcemod.add_game_frame_hook(on_game_frame));
 
-        self.handle_type = Some(handlesys.create_type("IntHandle", myself.get_identity())?);
+        self.handle_type = Some(handlesys.create_type("IntHandle", None, myself.get_identity())?);
 
         register_natives!(
             &sys,

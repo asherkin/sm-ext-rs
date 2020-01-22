@@ -33,7 +33,7 @@ impl<'ctx> TryIntoPlugin<'ctx> for RustContext {
 
     fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<cell_t, Self::Error> {
         let object = Rc::new(RefCell::new(self));
-        let handle = MyExtension::handle_type().create_handle(object, ctx.get_identity())?;
+        let handle = MyExtension::handle_type().create_handle(object, ctx.get_identity(), None)?;
 
         Ok(handle.into())
     }
@@ -93,7 +93,7 @@ impl IExtensionInterface for MyExtension {
         let handlesys: IHandleSys = sys.request_interface(&myself)?;
         println!(">>> Got interface: {:?} v{:?}", handlesys.get_interface_name(), handlesys.get_interface_version());
 
-        self.handle_type = Some(handlesys.create_type("RustContext", myself.get_identity())?);
+        self.handle_type = Some(handlesys.create_type("RustContext", None, myself.get_identity())?);
 
         register_natives!(
             &sys,
