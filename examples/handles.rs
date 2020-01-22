@@ -20,22 +20,20 @@
 //! }
 //! ```
 
-use sm_ext::{cell_t, native, register_natives, HandleError, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
+use sm_ext::{cell_t, native, register_natives, HandleError, HandleId, HandleType, IExtension, IExtensionInterface, IHandleSys, IPluginContext, IShareSys, SMExtension, SMInterfaceApi, TryIntoPlugin};
+use std::cell::RefCell;
+use std::error::Error;
+use std::rc::Rc;
 
 #[derive(Debug)]
 struct RustContext(i32);
-
-impl HasHandleType for RustContext {
-    fn handle_type<'ty>() -> &'ty HandleType<Self> {
-        MyExtension::handle_type()
-    }
-}
 
 impl<'ctx> TryIntoPlugin<'ctx> for RustContext {
     type Error = HandleError;
 
     fn try_into_plugin(self, ctx: &'ctx IPluginContext) -> Result<cell_t, Self::Error> {
-        let handle = MyExtension::handle_type().create_handle(self, ctx.get_identity())?;
+        let object = Rc::new(RefCell::new(self));
+        let handle = MyExtension::handle_type().create_handle(object, ctx.get_identity())?;
 
         Ok(handle.into())
     }
@@ -49,23 +47,31 @@ fn native_obj_new(_ctx: &IPluginContext) -> RustContext {
 }
 
 #[native]
-fn native_obj_add(_ctx: &IPluginContext, mut this: HandleRef<RustContext>, number: i32) {
+fn native_obj_add(ctx: &IPluginContext, this: HandleId, number: i32) -> Result<(), Box<dyn Error>> {
     println!(">>> Rust.Add({:?}, {:?})", this, number);
 
+    let this = MyExtension::handle_type().read_handle(this, ctx.get_identity())?;
+    let mut this = this.try_borrow_mut()?;
+
     this.0 += number;
+
+    Ok(())
 }
 
 #[native]
-fn native_obj_result(_ctx: &IPluginContext, this: HandleRef<RustContext>) -> i32 {
+fn native_obj_result(ctx: &IPluginContext, this: HandleId) -> Result<i32, Box<dyn Error>> {
     println!(">>> Rust.Result({:?})", this);
 
-    this.0
+    let this = MyExtension::handle_type().read_handle(this, ctx.get_identity())?;
+    let this = this.try_borrow()?;
+
+    Ok(this.0)
 }
 
 #[derive(Default, SMExtension)]
 #[extension(name = "Rusty", description = "Sample extension written in Rust")]
 pub struct MyExtension {
-    handle_type: Option<HandleType<RustContext>>,
+    handle_type: Option<HandleType<RefCell<RustContext>>>,
 }
 
 impl MyExtension {
@@ -75,7 +81,7 @@ impl MyExtension {
         EXTENSION_GLOBAL.with(|ext| unsafe { &(*ext.borrow().unwrap()).delegate })
     }
 
-    fn handle_type() -> &'static HandleType<RustContext> {
+    fn handle_type() -> &'static HandleType<RefCell<RustContext>> {
         Self::get().handle_type.as_ref().unwrap()
     }
 }

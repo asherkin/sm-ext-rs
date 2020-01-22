@@ -25,22 +25,20 @@
 use async_std::task;
 use futures::executor::{LocalPool, LocalSpawner};
 use futures::task::LocalSpawnExt;
-use sm_ext::{native, register_natives, CallableParam, ExecType, Executable, GameFrameHookId, HandleId, HandleRef, HandleType, HasHandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
+use sm_ext::{native, register_natives, CallableParam, ExecType, Executable, GameFrameHookId, HandleId, HandleType, IExtension, IExtensionInterface, IForwardManager, IHandleSys, IPluginContext, IPluginFunction, IShareSys, ISourceMod, SMExtension, SMInterfaceApi};
 use std::cell::RefCell;
 use std::error::Error;
+use std::rc::Rc;
 use std::time::Duration;
 
 struct IntHandle(i32);
 
-impl HasHandleType for IntHandle {
-    fn handle_type<'ty>() -> &'ty HandleType<Self> {
-        MyExtension::handle_type()
-    }
-}
-
 #[native]
-fn native_handle_read(_ctx: &IPluginContext, handle: HandleRef<IntHandle>) -> Result<i32, Box<dyn Error>> {
-    Ok(handle.0)
+fn native_handle_read(ctx: &IPluginContext, this: HandleId) -> Result<i32, Box<dyn Error>> {
+    let this = MyExtension::handle_type().read_handle(this, ctx.get_identity())?;
+    let this = this.try_borrow()?;
+
+    Ok(this.0)
 }
 
 #[native]
@@ -48,14 +46,17 @@ fn test_native(ctx: &IPluginContext, mut func: IPluginFunction) -> Result<(), Bo
     let mut forward = MyExtension::forwardsys().create_private_forward(None, ExecType::Ignore, &[HandleId::param_type()])?;
     forward.add_function(&mut func);
 
-    let mut this = IntHandle(0).into_handle()?;
-    let handle = this.clone_handle(ctx.get_identity())?;
+    let this = Rc::new(RefCell::new(IntHandle(0)));
+    let handle = MyExtension::handle_type().create_handle(this.clone(), ctx.get_identity())?;
 
     MyExtension::spawner().spawn_local(async move {
         let future = async move {
             task::sleep(Duration::from_secs(5)).await;
 
-            this.0 = 42;
+            {
+                let mut this = this.try_borrow_mut()?;
+                this.0 = 42;
+            }
 
             forward.push(handle)?;
             forward.execute()?;
@@ -85,7 +86,7 @@ pub struct MyExtension {
     forwardsys: Option<IForwardManager>,
     sourcemod: Option<ISourceMod>,
     frame_hook: Option<GameFrameHookId>,
-    handle_type: Option<HandleType<IntHandle>>,
+    handle_type: Option<HandleType<RefCell<IntHandle>>>,
     pool: RefCell<LocalPool>,
 }
 
@@ -100,7 +101,7 @@ impl MyExtension {
         Self::get().forwardsys.as_ref().unwrap()
     }
 
-    fn handle_type() -> &'static HandleType<IntHandle> {
+    fn handle_type() -> &'static HandleType<RefCell<IntHandle>> {
         Self::get().handle_type.as_ref().unwrap()
     }
 

@@ -5,9 +5,9 @@
 use std::convert::TryFrom;
 use std::error::Error;
 use std::ffi::{CStr, CString, NulError};
-use std::ops::{Deref, DerefMut};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::{null, null_mut};
+use std::rc::Rc;
 use std::str::Utf8Error;
 
 pub use c_str_macro::c_str;
@@ -1357,13 +1357,14 @@ impl<T> IHandleTypeDispatchAdapter<T> {
 
     #[vtable_override]
     unsafe fn on_handle_destroy(this: IHandleTypeDispatchPtr, ty: HandleTypeId, object: *mut c_void) {
-        drop(Box::from_raw(object as *mut T));
+        drop(Rc::from_raw(object as *mut T));
     }
 
     #[vtable_override]
     unsafe fn get_handle_approx_size(this: IHandleTypeDispatchPtr, ty: HandleTypeId, object: *mut c_void, size: *mut c_uint) -> bool {
         // This isn't ideal as it doesn't account for dynamic sizes, probably need to add a trait at some point
         // for people to implement this properly. See also: https://github.com/rust-lang/rust/issues/63073
+        // This also isn't accounting for the Rc overhead as we're dealing with the internal ptr only.
         let object = object as *mut T;
         *size = std::mem::size_of_val(&*object) as u32;
 
@@ -1428,86 +1429,8 @@ impl<T> Drop for HandleType<T> {
     }
 }
 
-/// Implement this trait to allow automatic conversion to [`HandleRef`] from native arguments.
-pub trait HasHandleType: Sized {
-    fn handle_type<'ty>() -> &'ty HandleType<Self>;
-
-    // TODO: Try and avoid having to read the ptr back from the handle.
-    fn into_handle<'ty>(self) -> Result<HandleRef<'ty, Self>, HandleError> {
-        let ty = Self::handle_type();
-        let handle = ty.create_handle(self, ty.ident)?;
-        let ptr = ty.read_handle(handle, ty.ident)?;
-
-        Ok(HandleRef { ty, handle, ptr })
-    }
-}
-
-impl<'ctx, 'ty, T: HasHandleType> TryFromPlugin<'ctx> for HandleRef<'ty, T> {
-    type Error = HandleError;
-
-    fn try_from_plugin(ctx: &'ctx IPluginContext, value: cell_t) -> Result<Self, Self::Error> {
-        let ty = T::handle_type();
-        let handle = HandleId::from(value);
-        let owner = ctx.get_identity();
-
-        HandleRef::new(ty, handle, owner)
-    }
-}
-
-/// Wrapper for a [`HandleId`] that is [`Deref`] to the wrapping type.
-pub struct HandleRef<'ty, T> {
-    ty: &'ty HandleType<T>,
-    handle: HandleId,
-    ptr: *mut T,
-}
-
-impl<'ty, T> HandleRef<'ty, T> {
-    pub fn new(ty: &'ty HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<Self, HandleError> {
-        let ptr = ty.read_handle(handle, owner)?;
-        let owned = ty.clone_handle(handle, owner, ty.ident)?;
-
-        Ok(HandleRef { ty, handle: owned, ptr })
-    }
-
-    pub fn clone_handle(&self, new_owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
-        self.ty.clone_handle(self.handle, self.ty.ident, new_owner)
-    }
-}
-
-impl<T> Drop for HandleRef<'_, T> {
-    fn drop(&mut self) {
-        match self.ty.free_handle(self.handle, self.ty.ident) {
-            Ok(_) => self.handle = HandleId::invalid(),
-            Err(e) => panic!("invalid handle when dropping HandleRef: {}", e),
-        }
-    }
-}
-
-impl<T> Deref for HandleRef<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.ptr }
-    }
-}
-
-/// This is unsound if multiple [`HandleRef`]s are created wrapping the same Handle data.
-///
-/// To guarantee safety, do not use mutable HandleRefs but instead use a [`std::cell::RefCell`] wrapper inside your [`HandleType`].
-impl<T> DerefMut for HandleRef<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.ptr }
-    }
-}
-
-impl<T> std::fmt::Debug for HandleRef<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "HandleRef({:08x}, {:?})", self.handle.0, self.ptr)
-    }
-}
-
 impl<T> HandleType<T> {
-    pub fn create_handle(&self, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+    pub fn create_handle(&self, object: Rc<T>, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
         IHandleSys(self.iface).create_handle(self, object, owner)
     }
 
@@ -1519,7 +1442,7 @@ impl<T> HandleType<T> {
         IHandleSys(self.iface).free_handle(self, handle, owner)
     }
 
-    pub fn read_handle(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
+    pub fn read_handle(&self, handle: HandleId, owner: IdentityTokenPtr) -> Result<Rc<T>, HandleError> {
         IHandleSys(self.iface).read_handle(self, handle, owner)
     }
 }
@@ -1579,9 +1502,9 @@ impl IHandleSys {
         }
     }
 
-    fn create_handle<T>(&self, ty: &HandleType<T>, object: T, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
+    fn create_handle<T>(&self, ty: &HandleType<T>, object: Rc<T>, owner: IdentityTokenPtr) -> Result<HandleId, HandleError> {
         unsafe {
-            let object = Box::into_raw(Box::new(object)) as *mut c_void;
+            let object = Rc::into_raw(object) as *mut c_void;
             let security = HandleSecurity::new(owner, ty.ident);
             let mut err: HandleError = HandleError::None;
             let id = virtual_call!(CreateHandleEx, self.0, ty.id, object, &security, null(), &mut err);
@@ -1616,13 +1539,18 @@ impl IHandleSys {
         }
     }
 
-    fn read_handle<T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<*mut T, HandleError> {
+    fn read_handle<T>(&self, ty: &HandleType<T>, handle: HandleId, owner: IdentityTokenPtr) -> Result<Rc<T>, HandleError> {
         unsafe {
             let security = HandleSecurity::new(owner, ty.ident);
             let mut object: *mut c_void = null_mut();
             let err = virtual_call!(ReadHandle, self.0, handle, ty.id, &security, &mut object);
             match err {
-                HandleError::None => Ok(object as *mut T),
+                HandleError::None => Ok({
+                    // https://github.com/rust-lang/rust/issues/48108
+                    let object = Rc::from_raw(object as *mut T);
+                    std::mem::forget(object.clone());
+                    object
+                }),
                 _ => Err(err),
             }
         }
@@ -1697,7 +1625,7 @@ impl Drop for GameFrameHookId {
 }
 
 unsafe extern "C" fn frame_action_trampoline<F: FnMut() + 'static>(func: *mut c_void) {
-    let mut func = Box::<F>::from_raw(func as *mut _);
+    let mut func: Box<F> = Box::from_raw(func as *mut _);
     (*func)()
 }
 
